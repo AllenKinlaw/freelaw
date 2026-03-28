@@ -15,7 +15,7 @@ export interface IngestionStatus {
 
 @Injectable({ providedIn: 'root' })
 export class IngestionService {
-  readonly API_BASE = 'http://ec2-54-242-194-234.compute-1.amazonaws.com:8000';
+  readonly API_BASE = 'https://hzook8iwod.execute-api.us-east-1.amazonaws.com';
 
   constructor(private http: HttpClient) {}
 
