@@ -2,7 +2,8 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { IngestionService, IngestionStatus } from './ingestion.service';
-import { Subscription } from 'rxjs';
+import { Subscription, interval } from 'rxjs';
+import { switchMap, takeWhile } from 'rxjs/operators';
 
 interface Court      { id: string; name: string; }
 interface CourtGroup { label: string; courts: Court[]; }
@@ -27,7 +28,8 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   // ── Court storage estimates ────────────────────────────────────────────────
   courtStats:  Record<string, { est_storage: string; est_opinions: number }> = {};
-  scanStatus = { is_scanning: false, message: 'Not yet scanned.' };
+  scanStatus: { is_scanning: boolean; message: string; dockets_scanned?: number } =
+    { is_scanning: false, message: 'Not yet scanned.' };
   statsAvailable = false;
 
   // ── Live status ────────────────────────────────────────────────────────────
@@ -43,9 +45,10 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.2.0';
+  readonly version = '2.3.0';
 
   private statusSub?: Subscription;
+  private scanPollSub?: Subscription;
 
   // ── Court groups (used by the Reset court picker) ──────────────────────────
   readonly courtGroups: CourtGroup[] = [
@@ -377,9 +380,30 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
         this.scanStatus     = res.scan_status ?? this.scanStatus;
         if (res.available && res.courts) {
           this.courtStats = res.courts;
+        } else if (res.scan_status?.is_scanning) {
+          // Scan was already running when we loaded — start the progress poll
+          this._startScanPoll();
         }
       },
       error: () => { /* stats are optional — ignore */ },
+    });
+  }
+
+  private _startScanPoll(): void {
+    this.scanPollSub?.unsubscribe();
+    this.scanPollSub = interval(4000).pipe(
+      switchMap(() => this.ingestion.getCourtStats()),
+      takeWhile(res => !res.available, true),   // emit once more when done
+    ).subscribe({
+      next: (res) => {
+        this.scanStatus = res.scan_status ?? this.scanStatus;
+        if (res.available && res.courts) {
+          this.statsAvailable = true;
+          this.courtStats     = res.courts;
+          this.scanPollSub?.unsubscribe();
+        }
+      },
+      error: () => {},
     });
   }
 
@@ -392,9 +416,17 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
   }
 
   onStartCourtScan(): void {
+    // Optimistically disable the button immediately
+    this.scanStatus = { ...this.scanStatus, is_scanning: true, message: 'Starting scan…' };
     this.ingestion.startCourtScan().subscribe({
-      next:  res => { this.actionMessage = res.message ?? 'Scan started.'; },
-      error: ()  => { this.actionMessage = 'Failed to start court scan.'; },
+      next: (res) => {
+        this.actionMessage = res.message ?? 'Scan started.';
+        this._startScanPoll();
+      },
+      error: () => {
+        this.actionMessage = 'Failed to start court scan.';
+        this.scanStatus = { ...this.scanStatus, is_scanning: false };
+      },
     });
   }
 
@@ -439,5 +471,6 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.statusSub?.unsubscribe();
+    this.scanPollSub?.unsubscribe();
   }
 }

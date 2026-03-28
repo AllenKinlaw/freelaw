@@ -75,17 +75,23 @@
     </div>
 
     <!-- Storage estimates scan panel -->
-    <div class="fl-scan-panel" [class.scanned]="statsAvailable">
+    <div class="fl-scan-panel" [class.scanned]="statsAvailable" [class.scanning]="scanStatus.is_scanning">
       <div class="fl-scan-info">
-        <span class="fl-scan-icon">{{ statsAvailable ? '✓' : '⚡' }}</span>
+        <span class="fl-scan-icon">{{ statsAvailable ? '✓' : (scanStatus.is_scanning ? '⏳' : '⚡') }}</span>
         <span class="fl-scan-msg">{{ scanStatus.message }}</span>
+      </div>
+      <div *ngIf="scanStatus.is_scanning" class="fl-scan-progress">
+        <div class="fl-scan-bar">
+          <div class="fl-scan-bar-fill"></div>
+        </div>
+        <span class="fl-scan-count">{{ (scanStatus.dockets_scanned | number) ?? '0' }} dockets scanned…</span>
       </div>
       <button
         class="btn-scan"
         (click)="onStartCourtScan()"
         [disabled]="scanStatus.is_scanning || status.is_running || !backendOnline"
-        *ngIf="!statsAvailable || scanStatus.is_scanning">
-        {{ scanStatus.is_scanning ? 'Scanning…' : 'Scan Storage Estimates (~5 min)' }}
+        *ngIf="!statsAvailable">
+        Scan Storage Estimates (~15 min)
       </button>
     </div>
 
