@@ -30,20 +30,34 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
+  readonly version = '1.0.1';
 
   private statusSub?: Subscription;
 
   constructor(private ingestion: IngestionService) {}
 
   ngOnInit(): void {
+    console.log(`[FreeLaw v${this.version}] ngOnInit fired`);
+    console.log(`[FreeLaw] API_BASE = ${this.ingestion.API_BASE}`);
+
     this.ingestion.getHealth().subscribe({
-      next:  () => { this.backendOnline = true; },
-      error: () => { this.status.message = 'Cannot reach backend. Is the EC2 server running?'; },
+      next: (res) => {
+        console.log('[FreeLaw] Health check OK:', res);
+        this.backendOnline = true;
+      },
+      error: (err) => {
+        console.error('[FreeLaw] Health check FAILED:', err);
+        this.status.message = 'Cannot reach backend. Is the EC2 server running?';
+      },
     });
 
-    this.statusSub = this.ingestion.getStatusUpdates().subscribe(data => {
-      this.status = data;
-      this.backendOnline = true;
+    this.statusSub = this.ingestion.getStatusUpdates().subscribe({
+      next: (data) => {
+        console.log('[FreeLaw] Status update:', data);
+        this.status = data;
+        this.backendOnline = true;
+      },
+      error: (err) => console.error('[FreeLaw] Status poll error:', err),
     });
   }
 

@@ -1,7 +1,7 @@
 <div class="fl-container">
 
   <header class="fl-header">
-    <h2>SC Court Data Ingestion Manager</h2>
+    <h2>SC Court Data Ingestion Manager <small style="font-size:0.6rem;color:#999;">v{{ version }}</small></h2>
     <span class="fl-badge" [class.online]="backendOnline" [class.offline]="!backendOnline">
       {{ backendOnline ? 'Backend Online' : 'Backend Offline' }}
     </span>
