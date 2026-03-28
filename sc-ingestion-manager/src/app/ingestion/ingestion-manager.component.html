@@ -48,13 +48,34 @@
   <section class="fl-bulk">
     <h3>Bulk Ingest from S3 <span class="fl-tag">Recommended</span></h3>
     <p class="fl-hint">
-      Streams the full CourtListener bulk data directly from their public S3 bucket —
-      no API key required, no disk usage. Automatically finds all SC &amp; SCCtApp
-      opinions across all years.
+      Streams CourtListener bulk data from S3 — no API key required, no disk usage.
+      Finds all SC &amp; SCCtApp opinions. Optionally restrict to a year range.
     </p>
+
+    <div class="fl-year-row">
+      <label class="fl-toggle">
+        <input type="checkbox" [(ngModel)]="allYears" />
+        All years
+      </label>
+      <ng-container *ngIf="!allYears">
+        <label>
+          From
+          <input type="number" [(ngModel)]="startYear" min="1800" [max]="endYear" class="year-input" />
+        </label>
+        <label>
+          To
+          <input type="number" [(ngModel)]="endYear" [min]="startYear" max="2099" class="year-input" />
+        </label>
+        <span class="fl-year-count">
+          {{ endYear - startYear + 1 }} year{{ (endYear - startYear + 1) !== 1 ? 's' : '' }}
+        </span>
+      </ng-container>
+    </div>
+
     <div class="fl-row fl-actions">
       <button class="btn-bulk" (click)="onBulkIngest()" [disabled]="status.is_running || !backendOnline">
         &#9654; Start Bulk Ingest (S3)
+        <span *ngIf="!allYears"> &nbsp;{{ startYear }}–{{ endYear }}</span>
       </button>
       <button class="btn-stop" (click)="onStop()" [disabled]="!status.is_running">
         &#9632; Stop

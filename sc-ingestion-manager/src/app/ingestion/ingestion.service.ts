@@ -45,8 +45,11 @@ export class IngestionService {
     return this.http.post<any>(`${this.API_BASE}/reset-progress`, {}, { params });
   }
 
-  bulkIngest(): Observable<any> {
-    return this.http.post<any>(`${this.API_BASE}/bulk-ingest`, {});
+  bulkIngest(startYear?: number | null, endYear?: number | null): Observable<any> {
+    const body: Record<string, number> = {};
+    if (startYear != null) body['start_year'] = startYear;
+    if (endYear   != null) body['end_year']   = endYear;
+    return this.http.post<any>(`${this.API_BASE}/bulk-ingest`, body);
   }
 
   getCourtStats(): Observable<any> {

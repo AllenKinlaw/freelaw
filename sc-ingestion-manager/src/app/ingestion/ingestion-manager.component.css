@@ -135,6 +135,42 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-bulk { background: #7c3aed; color: #fff; }
 .btn-bulk:hover:not(:disabled) { background: #6d28d9; }
 
+/* ── Year range row (bulk ingest) ───────────────────────────────────────────── */
+.fl-year-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.85rem;
+}
+
+.fl-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  color: #444;
+  font-weight: 500;
+}
+.fl-toggle input[type='checkbox'] { cursor: pointer; accent-color: #7c3aed; }
+
+.year-input {
+  width: 90px !important;
+  padding: 5px 7px;
+  border: 1px solid #ccd0de;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background: #fff;
+  margin-top: 3px;
+}
+
+.fl-year-count {
+  color: #7c3aed;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
 .fl-tag {
   display: inline-block;
   font-size: 0.65rem;

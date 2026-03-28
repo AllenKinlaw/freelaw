@@ -17,9 +17,10 @@ interface CourtGroup { label: string; courts: Court[]; }
 })
 export class IngestionManagerComponent implements OnInit, OnDestroy {
 
-  // ── Legacy API fields (kept for when API access is restored) ───────────────
-  startYear = 2020;
-  endYear   = 2024;
+  // ── Bulk ingest year range ─────────────────────────────────────────────────
+  allYears  = true;
+  startYear = 2015;
+  endYear   = new Date().getFullYear();
 
   // ── Reset fields ───────────────────────────────────────────────────────────
   resetYear?: number;
@@ -45,7 +46,7 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.3.0';
+  readonly version = '2.4.0';
 
   private statusSub?: Subscription;
   private scanPollSub?: Subscription;
@@ -431,7 +432,9 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
   }
 
   onBulkIngest(): void {
-    this.ingestion.bulkIngest().subscribe({
+    const start = this.allYears ? null : this.startYear;
+    const end   = this.allYears ? null : this.endYear;
+    this.ingestion.bulkIngest(start, end).subscribe({
       next:  res => { this.actionMessage = res.message ?? 'Bulk S3 ingest started.'; },
       error: ()  => { this.actionMessage = 'Failed to start bulk ingest.'; },
     });

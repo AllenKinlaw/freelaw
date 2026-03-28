@@ -35,6 +35,11 @@ class IngestRequest(BaseModel):
     years: List[int]
 
 
+class BulkIngestRequest(BaseModel):
+    start_year: Optional[int] = None
+    end_year:   Optional[int] = None
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -68,15 +73,21 @@ def get_status():
 
 
 @app.post("/bulk-ingest")
-def start_bulk_ingestion(background_tasks: BackgroundTasks):
+def start_bulk_ingestion(req: BulkIngestRequest, background_tasks: BackgroundTasks):
     """Trigger ingestion from CourtListener S3 bulk CSV files (no API key needed)."""
     if status_tracker["is_running"]:
         return {
             "status": "already_running",
             "message": "Ingestion is already in progress.",
         }
-    background_tasks.add_task(bulk_ingest_worker, collection)
-    return {"status": "started", "message": "Bulk S3 ingest started (SC + SCCtApp)."}
+    year_label = (
+        f"{req.start_year}–{req.end_year}" if req.start_year and req.end_year
+        else f"from {req.start_year}" if req.start_year
+        else f"up to {req.end_year}"  if req.end_year
+        else "all years"
+    )
+    background_tasks.add_task(bulk_ingest_worker, collection, req.start_year, req.end_year)
+    return {"status": "started", "message": f"Bulk S3 ingest started ({year_label})."}
 
 
 @app.get("/court-stats")

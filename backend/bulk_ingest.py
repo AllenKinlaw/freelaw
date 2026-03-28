@@ -160,10 +160,27 @@ def _collect_sc_dockets(s3) -> dict[str, str]:
 
 # ── Phase 2 ───────────────────────────────────────────────────────────────────
 
-def _collect_sc_clusters(s3, sc_dockets: dict[str, str]) -> dict[str, dict]:
-    """Return {cluster_id: {case_name, court, year}} for SC opinion clusters."""
-    key = _find_latest_key(s3, "opinion-clusters")
-    status_tracker["message"] = f"Phase 2/3: Scanning clusters … (key: {key.split('/')[-1]})"
+def _collect_sc_clusters(
+    s3,
+    sc_dockets: dict[str, str],
+    start_year: int | None = None,
+    end_year:   int | None = None,
+) -> dict[str, dict]:
+    """Return {cluster_id: {case_name, court, year}} for SC opinion clusters.
+
+    If start_year / end_year are provided, only clusters whose date_filed falls
+    within [start_year, end_year] (inclusive) are kept.
+    """
+    key        = _find_latest_key(s3, "opinion-clusters")
+    year_label = (
+        f"{start_year}–{end_year}" if start_year and end_year
+        else f"from {start_year}" if start_year
+        else f"up to {end_year}"  if end_year
+        else "all years"
+    )
+    status_tracker["message"] = (
+        f"Phase 2/3: Scanning clusters ({year_label}) … (key: {key.split('/')[-1]})"
+    )
 
     sc_clusters: dict[str, dict] = {}
     total = 0
@@ -185,6 +202,12 @@ def _collect_sc_clusters(s3, sc_dockets: dict[str, str]) -> dict[str, dict]:
             year = int(date_filed[:4]) if len(date_filed) >= 4 else 0
         except ValueError:
             year = 0
+
+        # Apply year range filter
+        if start_year and year and year < start_year:
+            continue
+        if end_year and year and year > end_year:
+            continue
 
         case_name = (
             row.get("case_name")
@@ -286,11 +309,23 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
 
 # ── Main worker ───────────────────────────────────────────────────────────────
 
-def bulk_ingest_worker(collection: Collection) -> None:
+def bulk_ingest_worker(
+    collection:  Collection,
+    start_year:  int | None = None,
+    end_year:    int | None = None,
+) -> None:
     """
     Full bulk S3 ingestion pipeline.
     Runs as a FastAPI BackgroundTask — updates status_tracker throughout.
+
+    start_year / end_year: optional inclusive year bounds (None = no limit).
     """
+    year_label = (
+        f"{start_year}–{end_year}" if start_year and end_year
+        else f"from {start_year}" if start_year
+        else f"up to {end_year}"  if end_year
+        else "all years"
+    )
     status_tracker.update({
         "is_running":         True,
         "current_year":       None,
@@ -298,7 +333,7 @@ def bulk_ingest_worker(collection: Collection) -> None:
         "current_page":       0,
         "opinions_processed": 0,
         "chunks_upserted":    0,
-        "message":            "Starting bulk S3 ingest…",
+        "message":            f"Starting bulk S3 ingest ({year_label})…",
     })
 
     try:
@@ -314,7 +349,7 @@ def bulk_ingest_worker(collection: Collection) -> None:
             return
 
         # ── Phase 2: opinion clusters ────────────────────────────────────────
-        sc_clusters = _collect_sc_clusters(s3, sc_dockets)
+        sc_clusters = _collect_sc_clusters(s3, sc_dockets, start_year, end_year)
         del sc_dockets  # free memory — no longer needed
         if not status_tracker["is_running"]:
             status_tracker["message"] = "Stopped during Phase 2 (clusters)."
