@@ -12,8 +12,23 @@
 
   <!-- ── Live status panel ────────────────────────────────────────────── -->
   <section class="fl-status" [class.active]="status.is_running">
-    <h3>Status</h3>
+    <div class="fl-status-header">
+      <h3>Status</h3>
+      <span *ngIf="status.is_running && phaseLabel" class="fl-phase-badge">{{ phaseLabel }}</span>
+      <span *ngIf="status.is_running && elapsed" class="fl-elapsed">⏱ {{ elapsed }}</span>
+    </div>
     <p class="fl-message">{{ status.message }}</p>
+
+    <!-- Phase 3 progress bar -->
+    <div *ngIf="status.phase === 'opinions' && status.total_expected > 0" class="fl-progress-wrap">
+      <div class="fl-progress-bar">
+        <div class="fl-progress-fill" [style.width.%]="progressPct"></div>
+      </div>
+      <span class="fl-progress-label">
+        {{ progressPct }}% &nbsp;·&nbsp;
+        {{ status.opinions_processed | number }} / {{ status.total_expected | number }} opinions
+      </span>
+    </div>
 
     <div *ngIf="status.is_running" class="fl-stats">
       <div class="stat">
@@ -25,10 +40,6 @@
         <span class="value">{{ status.current_court ?? '—' }}</span>
       </div>
       <div class="stat">
-        <span class="label">Page</span>
-        <span class="value">{{ status.current_page }}</span>
-      </div>
-      <div class="stat">
         <span class="label">Opinions</span>
         <span class="value">{{ status.opinions_processed | number }}</span>
       </div>
@@ -36,11 +47,16 @@
         <span class="label">Chunks</span>
         <span class="value">{{ status.chunks_upserted | number }}</span>
       </div>
+      <div *ngIf="status.total_expected > 0" class="stat">
+        <span class="label">Expected</span>
+        <span class="value">{{ status.total_expected | number }}</span>
+      </div>
     </div>
 
     <div *ngIf="!status.is_running && status.opinions_processed > 0" class="fl-summary">
       Last run: {{ status.opinions_processed | number }} opinions &bull;
       {{ status.chunks_upserted | number }} chunks upserted
+      <span *ngIf="elapsed"> &bull; {{ elapsed }} elapsed</span>
     </div>
   </section>
 
@@ -80,6 +96,20 @@
       <button class="btn-stop" (click)="onStop()" [disabled]="!status.is_running">
         &#9632; Stop
       </button>
+    </div>
+
+    <!-- Compact live progress ticker (shown while running) -->
+    <div *ngIf="status.is_running" class="fl-live-ticker">
+      <span class="fl-ticker-phase">{{ phaseLabel || 'Running…' }}</span>
+      <span class="fl-ticker-sep">·</span>
+      <span>{{ status.opinions_processed | number }} opinions</span>
+      <span class="fl-ticker-sep">·</span>
+      <span>{{ status.chunks_upserted | number }} chunks</span>
+      <span *ngIf="elapsed" class="fl-ticker-sep">·</span>
+      <span *ngIf="elapsed">⏱ {{ elapsed }}</span>
+      <span *ngIf="status.phase === 'opinions' && status.total_expected > 0" class="fl-ticker-pct">
+        {{ progressPct }}%
+      </span>
     </div>
   </section>
 

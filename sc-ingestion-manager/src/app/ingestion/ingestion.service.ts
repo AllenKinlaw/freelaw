@@ -4,13 +4,16 @@ import { Observable, interval, EMPTY } from 'rxjs';
 import { switchMap, share, catchError } from 'rxjs/operators';
 
 export interface IngestionStatus {
-  is_running: boolean;
-  current_year: number | null;
-  current_court: string | null;
-  current_page: number;
+  is_running:         boolean;
+  current_year:       number | null;
+  current_court:      string | null;
+  current_page:       number;
   opinions_processed: number;
-  chunks_upserted: number;
-  message: string;
+  chunks_upserted:    number;
+  message:            string;
+  phase:              string;        // idle | dockets | clusters | opinions | done
+  total_expected:     number;        // SC clusters found in Phase 2
+  started_at:         string | null; // ISO-8601 UTC
 }
 
 @Injectable({ providedIn: 'root' })

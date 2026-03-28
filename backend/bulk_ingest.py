@@ -15,6 +15,7 @@ import csv
 import io
 import os
 import re
+from datetime import datetime, timezone
 
 import boto3
 from botocore import UNSIGNED
@@ -333,6 +334,9 @@ def bulk_ingest_worker(
         "current_page":       0,
         "opinions_processed": 0,
         "chunks_upserted":    0,
+        "total_expected":     0,
+        "phase":              "dockets",
+        "started_at":         datetime.now(timezone.utc).isoformat(),
         "message":            f"Starting bulk S3 ingest ({year_label})…",
     })
 
@@ -349,6 +353,7 @@ def bulk_ingest_worker(
             return
 
         # ── Phase 2: opinion clusters ────────────────────────────────────────
+        status_tracker["phase"] = "clusters"
         sc_clusters = _collect_sc_clusters(s3, sc_dockets, start_year, end_year)
         del sc_dockets  # free memory — no longer needed
         if not status_tracker["is_running"]:
@@ -359,9 +364,12 @@ def bulk_ingest_worker(
             return
 
         # ── Phase 3: opinions ────────────────────────────────────────────────
+        status_tracker["phase"]          = "opinions"
+        status_tracker["total_expected"] = len(sc_clusters)
         _process_opinions(s3, sc_clusters, collection)
 
         if status_tracker["is_running"]:
+            status_tracker["phase"]   = "done"
             status_tracker["message"] = (
                 f"Bulk ingest complete — "
                 f"{status_tracker['opinions_processed']:,} opinions / "

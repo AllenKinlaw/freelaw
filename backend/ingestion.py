@@ -23,13 +23,17 @@ print("[Ingestion] Model ready.")
 
 # ── Shared status (read by /status endpoint) ─────────────────────────────────
 status_tracker: dict = {
-    "is_running": False,
-    "current_year": None,
-    "current_court": None,
-    "current_page": 0,
+    "is_running":         False,
+    "current_year":       None,
+    "current_court":      None,
+    "current_page":       0,
     "opinions_processed": 0,
-    "chunks_upserted": 0,
-    "message": "Idle",
+    "chunks_upserted":    0,
+    "message":            "Idle",
+    # bulk-ingest extras
+    "phase":              "idle",   # idle | dockets | clusters | opinions | done
+    "total_expected":     0,        # SC opinion clusters found in Phase 2
+    "started_at":         None,     # ISO-8601 UTC timestamp when worker started
 }
 
 

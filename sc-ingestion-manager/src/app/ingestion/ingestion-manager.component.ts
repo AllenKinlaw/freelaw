@@ -42,14 +42,20 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
     opinions_processed: 0,
     chunks_upserted:    0,
     message:            'Connecting...',
+    phase:              'idle',
+    total_expected:     0,
+    started_at:         null,
   };
+
+  elapsed = '';
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.4.0';
+  readonly version = '2.5.0';
 
   private statusSub?: Subscription;
   private scanPollSub?: Subscription;
+  private elapsedSub?: Subscription;
 
   // ── Court groups (used by the Reset court picker) ──────────────────────────
   readonly courtGroups: CourtGroup[] = [
@@ -369,8 +375,12 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
     this.statusSub = this.ingestion.getStatusUpdates().subscribe({
       next: (data) => {
+        const wasRunning = this.status.is_running;
         this.status = data;
         this.backendOnline = true;
+        if (data.is_running && !wasRunning) this._startElapsed();
+        if (!data.is_running)               this._stopElapsed();
+        if (data.is_running)                this._updateElapsed();
       },
       error: (err) => console.error('[FreeLaw] Status poll error:', err),
     });
@@ -388,6 +398,48 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
       },
       error: () => { /* stats are optional — ignore */ },
     });
+  }
+
+  // ── Elapsed time helpers ───────────────────────────────────────────────────
+
+  private _startElapsed(): void {
+    this.elapsedSub?.unsubscribe();
+    this.elapsedSub = interval(1000).subscribe(() => this._updateElapsed());
+  }
+
+  private _stopElapsed(): void {
+    this.elapsedSub?.unsubscribe();
+    this._updateElapsed(); // final snapshot
+  }
+
+  private _updateElapsed(): void {
+    const t = this.status.started_at;
+    if (!t) { this.elapsed = ''; return; }
+    const secs = Math.floor((Date.now() - new Date(t).getTime()) / 1000);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    this.elapsed = h > 0
+      ? `${h}h ${m}m ${s}s`
+      : m > 0 ? `${m}m ${s}s` : `${s}s`;
+  }
+
+  /** 0–100 progress percentage for Phase 3 (opinions). */
+  get progressPct(): number {
+    if (!this.status.total_expected || this.status.phase !== 'opinions') return 0;
+    return Math.min(100, Math.round(
+      (this.status.opinions_processed / this.status.total_expected) * 100
+    ));
+  }
+
+  get phaseLabel(): string {
+    switch (this.status.phase) {
+      case 'dockets':  return 'Phase 1 / 3 — Scanning dockets';
+      case 'clusters': return 'Phase 2 / 3 — Scanning opinion clusters';
+      case 'opinions': return 'Phase 3 / 3 — Embedding & ingesting opinions';
+      case 'done':     return 'Complete';
+      default:         return '';
+    }
   }
 
   private _startScanPoll(): void {
@@ -475,5 +527,6 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.statusSub?.unsubscribe();
     this.scanPollSub?.unsubscribe();
+    this.elapsedSub?.unsubscribe();
   }
 }

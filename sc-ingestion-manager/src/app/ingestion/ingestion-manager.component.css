@@ -59,10 +59,87 @@ section h3 {
   border-left: 5px solid #3b82f6;
   background: #eff6ff;
 }
+
+.fl-status-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+.fl-status-header h3 { margin: 0; }
+
+.fl-phase-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: #3b82f6;
+  color: #fff;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.fl-elapsed {
+  font-size: 0.78rem;
+  color: #555;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Progress bar ───────────────────────────────────────────────────────────── */
+.fl-progress-wrap {
+  margin-bottom: 0.85rem;
+}
+.fl-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #bfdbfe;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.fl-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  border-radius: 999px;
+  transition: width 0.6s ease;
+}
+.fl-progress-label {
+  font-size: 0.78rem;
+  color: #1d4ed8;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .fl-message {
   font-size: 0.95rem;
   margin: 0 0 1rem;
   color: #444;
+}
+
+/* ── Live ticker (inside bulk section) ──────────────────────────────────────── */
+.fl-live-ticker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 0.5rem 0.85rem;
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  color: #1e40af;
+  font-variant-numeric: tabular-nums;
+}
+.fl-ticker-phase { font-weight: 700; }
+.fl-ticker-sep   { color: #93c5fd; }
+.fl-ticker-pct {
+  margin-left: auto;
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: #2563eb;
 }
 .fl-stats {
   display: flex;
