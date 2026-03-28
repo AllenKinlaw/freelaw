@@ -1,0 +1,6 @@
+.env
+sc_ingestion_progress.json
+__pycache__/
+*.pyc
+venv/
+.venv/

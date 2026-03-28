@@ -1,0 +1,140 @@
+/* ── Container ─────────────────────────────────────────────────────────────── */
+.fl-container {
+  font-family: 'Segoe UI', sans-serif;
+  max-width: 680px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  color: #1a1a2e;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.fl-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.fl-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.fl-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.fl-badge.online  { background: #d4edda; color: #155724; }
+.fl-badge.offline { background: #f8d7da; color: #721c24; }
+
+/* ── Notice bar ─────────────────────────────────────────────────────────────── */
+.fl-notice {
+  background: #fff3cd;
+  border-left: 4px solid #ffc107;
+  padding: 0.6rem 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+/* ── Sections ───────────────────────────────────────────────────────────────── */
+section {
+  background: #f8f9fc;
+  border: 1px solid #e0e4ef;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+section h3 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  color: #334;
+}
+
+/* ── Status panel ───────────────────────────────────────────────────────────── */
+.fl-status.active {
+  border-left: 5px solid #3b82f6;
+  background: #eff6ff;
+}
+.fl-message {
+  font-size: 0.95rem;
+  margin: 0 0 1rem;
+  color: #444;
+}
+.fl-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #dde3f0;
+  border-radius: 6px;
+  padding: 0.5rem 0.85rem;
+  min-width: 90px;
+}
+.stat .label { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+.stat .value { font-size: 1.2rem; font-weight: 700; color: #1a1a2e; }
+
+.fl-summary {
+  font-size: 0.85rem;
+  color: #555;
+}
+
+/* ── Form rows ──────────────────────────────────────────────────────────────── */
+.fl-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+  color: #555;
+  gap: 4px;
+}
+input[type='number'], select {
+  padding: 6px 8px;
+  border: 1px solid #ccd0de;
+  border-radius: 4px;
+  font-size: 0.95rem;
+  width: 130px;
+  background: #fff;
+}
+select { width: 170px; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+.fl-actions { align-items: flex-end; }
+button {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-start { background: #22c55e; color: #fff; }
+.btn-start:hover:not(:disabled) { background: #16a34a; }
+
+.btn-stop  { background: #ef4444; color: #fff; }
+.btn-stop:hover:not(:disabled)  { background: #dc2626; }
+
+.btn-reset { background: #6b7280; color: #fff; margin-top: 0.5rem; }
+.btn-reset:hover:not(:disabled) { background: #4b5563; }
+
+/* ── Hint text ──────────────────────────────────────────────────────────────── */
+.fl-hint {
+  font-size: 0.8rem;
+  color: #777;
+  margin: -0.5rem 0 0.75rem;
+}

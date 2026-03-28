@@ -1,0 +1,15 @@
+[Unit]
+Description=FreeLaw Ingestion Engine
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/freelaw/backend
+EnvironmentFile=/home/ubuntu/freelaw/backend/.env
+ExecStart=/home/ubuntu/freelaw/backend/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

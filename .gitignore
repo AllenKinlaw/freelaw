@@ -1,0 +1,16 @@
+# Secrets & credentials — never commit these
+AWS/
+backend/.env
+backend/sc_ingestion_progress.json
+
+# Python
+backend/__pycache__/
+backend/*.pyc
+backend/.venv/
+
+# Angular
+sc-ingestion-manager/node_modules/
+sc-ingestion-manager/dist/
+
+# macOS
+.DS_Store

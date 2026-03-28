@@ -1,0 +1,97 @@
+<div class="fl-container">
+
+  <header class="fl-header">
+    <h2>SC Court Data Ingestion Manager</h2>
+    <span class="fl-badge" [class.online]="backendOnline" [class.offline]="!backendOnline">
+      {{ backendOnline ? 'Backend Online' : 'Backend Offline' }}
+    </span>
+  </header>
+
+  <!-- ── Action feedback ──────────────────────────────────────────────── -->
+  <div *ngIf="actionMessage" class="fl-notice">{{ actionMessage }}</div>
+
+  <!-- ── Live status panel ────────────────────────────────────────────── -->
+  <section class="fl-status" [class.active]="status.is_running">
+    <h3>Status</h3>
+    <p class="fl-message">{{ status.message }}</p>
+
+    <div *ngIf="status.is_running" class="fl-stats">
+      <div class="stat">
+        <span class="label">Year</span>
+        <span class="value">{{ status.current_year }}</span>
+      </div>
+      <div class="stat">
+        <span class="label">Court</span>
+        <span class="value">{{ status.current_court ?? '—' }}</span>
+      </div>
+      <div class="stat">
+        <span class="label">Page</span>
+        <span class="value">{{ status.current_page }}</span>
+      </div>
+      <div class="stat">
+        <span class="label">Opinions</span>
+        <span class="value">{{ status.opinions_processed | number }}</span>
+      </div>
+      <div class="stat">
+        <span class="label">Chunks</span>
+        <span class="value">{{ status.chunks_upserted | number }}</span>
+      </div>
+    </div>
+
+    <div *ngIf="!status.is_running && status.opinions_processed > 0" class="fl-summary">
+      Last run: {{ status.opinions_processed | number }} opinions &bull;
+      {{ status.chunks_upserted | number }} chunks upserted
+    </div>
+  </section>
+
+  <!-- ── Controls ─────────────────────────────────────────────────────── -->
+  <section class="fl-controls">
+    <h3>Start Ingestion</h3>
+
+    <div class="fl-row">
+      <label>
+        Start Year
+        <input type="number" [(ngModel)]="startYear" min="1950" [max]="endYear" />
+      </label>
+      <label>
+        End Year
+        <input type="number" [(ngModel)]="endYear" [min]="startYear" max="2025" />
+      </label>
+    </div>
+
+    <div class="fl-row fl-actions">
+      <button class="btn-start" (click)="onStart()" [disabled]="status.is_running || !backendOnline">
+        ▶ Start  ({{ yearRange.length }} year{{ yearRange.length !== 1 ? 's' : '' }})
+      </button>
+      <button class="btn-stop" (click)="onStop()" [disabled]="!status.is_running">
+        ■ Stop
+      </button>
+    </div>
+  </section>
+
+  <!-- ── Reset progress ───────────────────────────────────────────────── -->
+  <section class="fl-reset">
+    <h3>Reset Progress Bookmark</h3>
+    <p class="fl-hint">Clear the saved page bookmark so a year restarts from page 1.</p>
+
+    <div class="fl-row">
+      <label>
+        Year (blank = all)
+        <input type="number" [(ngModel)]="resetYear" placeholder="e.g. 2022" />
+      </label>
+      <label>
+        Court (blank = all)
+        <select [(ngModel)]="resetCourt">
+          <option value="">— all courts —</option>
+          <option value="sc">SC Supreme Court</option>
+          <option value="scctapp">SC Court of Appeals</option>
+        </select>
+      </label>
+    </div>
+
+    <button class="btn-reset" (click)="onReset()" [disabled]="status.is_running">
+      Reset Bookmark
+    </button>
+  </section>
+
+</div>
