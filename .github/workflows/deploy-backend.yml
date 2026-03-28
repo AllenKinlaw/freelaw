@@ -19,13 +19,14 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy.pem
           chmod 600 ~/.ssh/deploy.pem
-          ssh-keyscan -H ec2-54-242-194-234.compute-1.amazonaws.com >> ~/.ssh/known_hosts
+          ssh-keyscan -T 30 -H ec2-54-242-194-234.compute-1.amazonaws.com >> ~/.ssh/known_hosts
 
       - name: Copy backend files to EC2
         run: |
           scp -i ~/.ssh/deploy.pem \
             backend/main.py \
             backend/ingestion.py \
+            backend/bulk_ingest.py \
             backend/chunker.py \
             backend/milvus_client.py \
             backend/progress.py \
