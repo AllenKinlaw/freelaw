@@ -156,3 +156,67 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   color: #777;
   margin: -0.5rem 0 0.75rem;
 }
+
+.fl-optional {
+  font-size: 0.75rem;
+  color: #aaa;
+  font-weight: 400;
+}
+
+.fl-version {
+  font-size: 0.6rem;
+  color: #999;
+}
+
+/* ── Court picker ───────────────────────────────────────────────────────────── */
+.fl-court-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 0.85rem;
+}
+
+.fl-court-label {
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.court-search {
+  padding: 7px 10px;
+  border: 1px solid #ccd0de;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+}
+.court-search:focus {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 2px rgba(124,58,237,0.15);
+}
+
+.court-select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #ccd0de;
+  border-radius: 4px;
+  font-size: 0.88rem;
+  padding: 4px;
+  background: #fff;
+  min-height: 140px;
+}
+.court-select:focus {
+  outline: none;
+  border-color: #7c3aed;
+}
+
+.fl-selected-court {
+  font-size: 0.82rem;
+  color: #444;
+  margin: 0;
+  padding: 4px 8px;
+  background: #ede9fe;
+  border-radius: 4px;
+  border-left: 3px solid #7c3aed;
+}
