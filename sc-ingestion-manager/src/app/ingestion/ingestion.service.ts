@@ -45,6 +45,10 @@ export class IngestionService {
     return this.http.post<any>(`${this.API_BASE}/reset-progress`, {}, { params });
   }
 
+  bulkIngest(): Observable<any> {
+    return this.http.post<any>(`${this.API_BASE}/bulk-ingest`, {});
+  }
+
   getHealth(): Observable<any> {
     return this.http.get<any>(`${this.API_BASE}/health`);
   }

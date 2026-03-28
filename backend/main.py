@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+from bulk_ingest import bulk_ingest_worker
 from ingestion import ingest_worker, status_tracker
 from milvus_client import connect_milvus, get_or_create_collection
 from progress import reset_progress
@@ -63,6 +64,18 @@ def stop_ingestion():
 @app.get("/status")
 def get_status():
     return status_tracker
+
+
+@app.post("/bulk-ingest")
+def start_bulk_ingestion(background_tasks: BackgroundTasks):
+    """Trigger ingestion from CourtListener S3 bulk CSV files (no API key needed)."""
+    if status_tracker["is_running"]:
+        return {
+            "status": "already_running",
+            "message": "Ingestion is already in progress.",
+        }
+    background_tasks.add_task(bulk_ingest_worker, collection)
+    return {"status": "started", "message": "Bulk S3 ingest started (SC + SCCtApp)."}
 
 
 @app.post("/reset-progress")

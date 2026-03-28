@@ -132,6 +132,24 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-reset { background: #6b7280; color: #fff; margin-top: 0.5rem; }
 .btn-reset:hover:not(:disabled) { background: #4b5563; }
 
+.btn-bulk { background: #7c3aed; color: #fff; }
+.btn-bulk:hover:not(:disabled) { background: #6d28d9; }
+
+.fl-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #7c3aed;
+  color: #fff;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
+.fl-tag--gray { background: #9ca3af; }
+
 /* ── Hint text ──────────────────────────────────────────────────────────────── */
 .fl-hint {
   font-size: 0.8rem;

@@ -30,7 +30,7 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '1.0.1';
+  readonly version = '2.0.0';
 
   private statusSub?: Subscription;
 
@@ -89,6 +89,13 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
     this.ingestion.resetProgress(this.resetYear, this.resetCourt || undefined).subscribe({
       next:  res => { this.actionMessage = `Reset: ${res.cleared}`; },
       error: ()  => { this.actionMessage = 'Reset failed — is ingestion still running?'; },
+    });
+  }
+
+  onBulkIngest(): void {
+    this.ingestion.bulkIngest().subscribe({
+      next:  res => { this.actionMessage = res.message ?? 'Bulk S3 ingest started.'; },
+      error: ()  => { this.actionMessage = 'Failed to start bulk ingest.'; },
     });
   }
 

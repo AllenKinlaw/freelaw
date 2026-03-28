@@ -44,9 +44,27 @@
     </div>
   </section>
 
+  <!-- ── Bulk S3 Ingest ───────────────────────────────────────────────── -->
+  <section class="fl-bulk">
+    <h3>Bulk Ingest from S3 <span class="fl-tag">Recommended</span></h3>
+    <p class="fl-hint">
+      Streams the full CourtListener bulk data directly from their public S3 bucket —
+      no API key required, no disk usage. Automatically finds all SC &amp; SCCtApp
+      opinions across all years.
+    </p>
+    <div class="fl-row fl-actions">
+      <button class="btn-bulk" (click)="onBulkIngest()" [disabled]="status.is_running || !backendOnline">
+        &#9654; Start Bulk Ingest (S3)
+      </button>
+      <button class="btn-stop" (click)="onStop()" [disabled]="!status.is_running">
+        &#9632; Stop
+      </button>
+    </div>
+  </section>
+
   <!-- ── Controls ─────────────────────────────────────────────────────── -->
   <section class="fl-controls">
-    <h3>Start Ingestion</h3>
+    <h3>Start Ingestion by Year Range <span class="fl-tag fl-tag--gray">Legacy / API</span></h3>
 
     <div class="fl-row">
       <label>
