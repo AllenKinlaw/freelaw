@@ -27,6 +27,7 @@ jobs:
             backend/main.py \
             backend/ingestion.py \
             backend/bulk_ingest.py \
+            backend/court_stats.py \
             backend/chunker.py \
             backend/milvus_client.py \
             backend/progress.py \

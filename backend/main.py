@@ -9,6 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 from bulk_ingest import bulk_ingest_worker
+from court_stats import load_stats, scan_status, scan_worker, stats_exist
 from ingestion import ingest_worker, status_tracker
 from milvus_client import connect_milvus, get_or_create_collection
 from progress import reset_progress
@@ -76,6 +77,27 @@ def start_bulk_ingestion(background_tasks: BackgroundTasks):
         }
     background_tasks.add_task(bulk_ingest_worker, collection)
     return {"status": "started", "message": "Bulk S3 ingest started (SC + SCCtApp)."}
+
+
+@app.get("/court-stats")
+def get_court_stats():
+    """Return cached per-court storage estimates, plus current scan status."""
+    return {
+        "available":   stats_exist(),
+        "scan_status": scan_status,
+        **(load_stats() if stats_exist() else {}),
+    }
+
+
+@app.post("/start-court-scan")
+def start_court_scan(background_tasks: BackgroundTasks):
+    """Trigger a one-time background scan of the S3 dockets CSV to build storage estimates."""
+    if scan_status["is_scanning"]:
+        return {"status": "already_scanning", "message": "Scan already running."}
+    if status_tracker["is_running"]:
+        return {"status": "busy", "message": "Cannot scan while ingestion is running."}
+    background_tasks.add_task(scan_worker)
+    return {"status": "started", "message": "Court stats scan started (~5–10 min)."}
 
 
 @app.post("/reset-progress")

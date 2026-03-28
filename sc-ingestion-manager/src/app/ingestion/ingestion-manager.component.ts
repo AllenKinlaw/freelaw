@@ -25,6 +25,11 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
   resetCourt    = '';
   courtSearch   = '';
 
+  // ── Court storage estimates ────────────────────────────────────────────────
+  courtStats:  Record<string, { est_storage: string; est_opinions: number }> = {};
+  scanStatus = { is_scanning: false, message: 'Not yet scanned.' };
+  statsAvailable = false;
+
   // ── Live status ────────────────────────────────────────────────────────────
   status: IngestionStatus = {
     is_running:         false,
@@ -38,7 +43,7 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.1.0';
+  readonly version = '2.2.0';
 
   private statusSub?: Subscription;
 
@@ -365,9 +370,33 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
       },
       error: (err) => console.error('[FreeLaw] Status poll error:', err),
     });
+
+    this.ingestion.getCourtStats().subscribe({
+      next: (res) => {
+        this.statsAvailable = res.available;
+        this.scanStatus     = res.scan_status ?? this.scanStatus;
+        if (res.available && res.courts) {
+          this.courtStats = res.courts;
+        }
+      },
+      error: () => { /* stats are optional — ignore */ },
+    });
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
+
+  /** Returns a formatted storage string like '~1.4 GB' or '' if not yet scanned. */
+  courtEst(id: string): string {
+    const s = this.courtStats[id];
+    return s ? `~${s.est_storage}` : '';
+  }
+
+  onStartCourtScan(): void {
+    this.ingestion.startCourtScan().subscribe({
+      next:  res => { this.actionMessage = res.message ?? 'Scan started.'; },
+      error: ()  => { this.actionMessage = 'Failed to start court scan.'; },
+    });
+  }
 
   onBulkIngest(): void {
     this.ingestion.bulkIngest().subscribe({

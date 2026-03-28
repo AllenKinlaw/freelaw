@@ -74,6 +74,21 @@
       </label>
     </div>
 
+    <!-- Storage estimates scan panel -->
+    <div class="fl-scan-panel" [class.scanned]="statsAvailable">
+      <div class="fl-scan-info">
+        <span class="fl-scan-icon">{{ statsAvailable ? '✓' : '⚡' }}</span>
+        <span class="fl-scan-msg">{{ scanStatus.message }}</span>
+      </div>
+      <button
+        class="btn-scan"
+        (click)="onStartCourtScan()"
+        [disabled]="scanStatus.is_scanning || status.is_running || !backendOnline"
+        *ngIf="!statsAvailable || scanStatus.is_scanning">
+        {{ scanStatus.is_scanning ? 'Scanning…' : 'Scan Storage Estimates (~5 min)' }}
+      </button>
+    </div>
+
     <!-- Court search + picker -->
     <div class="fl-court-picker">
       <label class="fl-court-label">
@@ -90,13 +105,14 @@
         <ng-container *ngFor="let group of filteredCourtGroups">
           <optgroup [label]="group.label">
             <option *ngFor="let c of group.courts" [value]="c.id">
-              {{ c.name }} <span class="court-id">({{ c.id }})</span>
+              {{ c.name }} ({{ c.id }}){{ courtEst(c.id) ? '  ·  ' + courtEst(c.id) : '' }}
             </option>
           </optgroup>
         </ng-container>
       </select>
       <p *ngIf="resetCourt" class="fl-selected-court">
         Selected: <strong>{{ resetCourt }}</strong>
+        <span *ngIf="courtEst(resetCourt)" class="fl-est-badge">{{ courtEst(resetCourt) }} est. Milvus storage</span>
       </p>
     </div>
 

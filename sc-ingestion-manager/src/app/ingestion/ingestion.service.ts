@@ -49,6 +49,14 @@ export class IngestionService {
     return this.http.post<any>(`${this.API_BASE}/bulk-ingest`, {});
   }
 
+  getCourtStats(): Observable<any> {
+    return this.http.get<any>(`${this.API_BASE}/court-stats`);
+  }
+
+  startCourtScan(): Observable<any> {
+    return this.http.post<any>(`${this.API_BASE}/start-court-scan`, {});
+  }
+
   getHealth(): Observable<any> {
     return this.http.get<any>(`${this.API_BASE}/health`);
   }
