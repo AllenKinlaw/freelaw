@@ -93,10 +93,22 @@ def start_bulk_ingestion(req: BulkIngestRequest, background_tasks: BackgroundTas
 @app.get("/court-stats")
 def get_court_stats():
     """Return cached per-court storage estimates, plus current scan status."""
+    data   = load_stats() if stats_exist() else {}
+    status = dict(scan_status)   # copy so we don't mutate the module-level dict
+
+    # If the service restarted after a completed scan, the in-memory message
+    # still reads "Not yet scanned". Derive the real message from the JSON file.
+    if stats_exist() and not scan_status["is_scanning"]:
+        scanned_at = data.get("scanned_at", "")[:10]
+        status["message"] = (
+            f"Estimates ready — {data.get('total_courts', 0):,} courts from "
+            f"{data.get('total_dockets', 0):,} dockets (scanned {scanned_at})"
+        )
+
     return {
         "available":   stats_exist(),
-        "scan_status": scan_status,
-        **(load_stats() if stats_exist() else {}),
+        "scan_status": status,
+        **data,
     }
 
 

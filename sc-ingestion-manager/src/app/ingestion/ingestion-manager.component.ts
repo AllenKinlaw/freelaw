@@ -18,7 +18,7 @@ interface CourtGroup { label: string; courts: Court[]; }
 export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   // ── Bulk ingest year range ─────────────────────────────────────────────────
-  allYears  = true;
+  allYears  = false;
   startYear = 2015;
   endYear   = new Date().getFullYear();
 
@@ -51,7 +51,7 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.5.0';
+  readonly version = '2.5.1';
 
   private statusSub?: Subscription;
   private scanPollSub?: Subscription;
