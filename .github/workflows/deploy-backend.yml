@@ -1,0 +1,44 @@
+name: Deploy Backend to EC2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Write SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy.pem
+          chmod 600 ~/.ssh/deploy.pem
+          ssh-keyscan -H ec2-54-242-194-234.compute-1.amazonaws.com >> ~/.ssh/known_hosts
+
+      - name: Copy backend files to EC2
+        run: |
+          scp -i ~/.ssh/deploy.pem \
+            backend/main.py \
+            backend/ingestion.py \
+            backend/chunker.py \
+            backend/milvus_client.py \
+            backend/progress.py \
+            backend/requirements.txt \
+            backend/start.sh \
+            backend/freelaw.service \
+            ubuntu@ec2-54-242-194-234.compute-1.amazonaws.com:/home/ubuntu/freelaw/backend/
+
+      - name: Install deps and restart service
+        run: |
+          ssh -i ~/.ssh/deploy.pem ubuntu@ec2-54-242-194-234.compute-1.amazonaws.com << 'EOF'
+            cd /home/ubuntu/freelaw/backend
+            .venv/bin/pip install --quiet -r requirements.txt
+            sudo systemctl restart freelaw
+            sudo systemctl status freelaw --no-pager
+          EOF
