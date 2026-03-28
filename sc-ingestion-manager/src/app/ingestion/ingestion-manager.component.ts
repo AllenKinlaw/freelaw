@@ -51,7 +51,7 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.5.1';
+  readonly version = '2.6.0';
 
   private statusSub?: Subscription;
   private scanPollSub?: Subscription;
@@ -434,11 +434,12 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
 
   get phaseLabel(): string {
     switch (this.status.phase) {
-      case 'dockets':  return 'Phase 1 / 3 — Scanning dockets';
-      case 'clusters': return 'Phase 2 / 3 — Scanning opinion clusters';
-      case 'opinions': return 'Phase 3 / 3 — Embedding & ingesting opinions';
-      case 'done':     return 'Complete';
-      default:         return '';
+      case 'dockets':   return 'Phase 1 / 3 — Scanning dockets';
+      case 'clusters':  return 'Phase 2 / 3 — Scanning opinion clusters';
+      case 'citations': return 'Phase 2.5 / 3 — Collecting citations';
+      case 'opinions':  return 'Phase 3 / 3 — Embedding & ingesting opinions';
+      case 'done':      return 'Complete';
+      default:          return '';
     }
   }
 

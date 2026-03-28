@@ -2,9 +2,10 @@
 bulk_ingest.py – Stream SC court opinions from CourtListener S3 bulk data.
 
 Pipeline (no large downloads — everything streams from S3):
-  Phase 1 – dockets CSV          → collect SC docket IDs  (court_id in {'sc','scctapp'})
-  Phase 2 – opinion_clusters CSV → collect SC cluster metadata  (case_name, year, court)
-  Phase 3 – opinions CSV         → chunk → embed → upsert to Milvus
+  Phase 1   – dockets CSV          → collect SC docket IDs  (court_id in {'sc','scctapp'})
+  Phase 2   – opinion_clusters CSV → collect SC cluster metadata  (case_name, year, court)
+  Phase 2.5 – citations CSV        → attach citation strings to SC clusters
+  Phase 3   – opinions CSV         → chunk → embed → upsert to Milvus
 
 Public bucket access (no AWS credentials required):
   s3://com-courtlistener-storage/bulk-data/
@@ -227,6 +228,48 @@ def _collect_sc_clusters(
     return sc_clusters
 
 
+# ── Phase 2.5 ─────────────────────────────────────────────────────────────────
+
+def _collect_sc_citations(s3, sc_cluster_ids: set) -> dict[str, str]:
+    """Return {cluster_id: "vol reporter page[, vol reporter page, ...]"} for SC clusters.
+
+    Streams the citations CSV (volume, reporter, page, cluster_id) and builds a
+    comma-separated citation string per cluster, e.g. "272 S.C. 120, 251 S.E.2d 890".
+    Only clusters already in sc_cluster_ids are kept.
+    """
+    key = _find_latest_key(s3, "citations")
+    status_tracker["message"] = f"Phase 2.5/3: Collecting citations … (key: {key.split('/')[-1]})"
+
+    sc_citations: dict[str, str] = {}
+    total = 0
+
+    for row in _stream_csv(s3, S3_BUCKET, key):
+        if not status_tracker["is_running"]:
+            break
+        total += 1
+        if total % 500_000 == 0:
+            status_tracker["message"] = (
+                f"Phase 2.5/3: Scanned {total:,} citations — {len(sc_citations):,} SC found…"
+            )
+
+        cluster_id = row.get("cluster_id", "")
+        if cluster_id not in sc_cluster_ids:
+            continue
+
+        vol = (row.get("volume") or "").strip()
+        rep = (row.get("reporter") or "").strip()
+        pg  = (row.get("page") or "").strip()
+        if not (vol and rep and pg):
+            continue
+
+        cite = f"{vol} {rep} {pg}"
+        existing = sc_citations.get(cluster_id, "")
+        sc_citations[cluster_id] = f"{existing}, {cite}" if existing else cite
+
+    print(f"[BulkIngest] Phase 2.5 done: {len(sc_citations):,} SC citations / {total:,} total")
+    return sc_citations
+
+
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) -> None:
@@ -274,8 +317,10 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
             skipped += 1
             continue
 
+        citation = meta.get("citation", "")
+
         enriched   = [
-            enrich_chunk(c, meta["case_name"], meta["court"], meta["year"], opinion_type)
+            enrich_chunk(c, meta["case_name"], meta["court"], meta["year"], opinion_type, citation)
             for c in chunks
         ]
         embeddings = model.encode(enriched, batch_size=EMBED_BATCH, show_progress_bar=False)
@@ -284,14 +329,15 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
         cluster_id_int = int(cluster_id) if cluster_id.isdigit() else 0
 
         collection.insert([
-            [opinion_id]             * n,   # opinion_id
-            [cluster_id_int]         * n,   # cluster_id
+            [opinion_id]              * n,  # opinion_id
+            [cluster_id_int]          * n,  # cluster_id
             [meta["case_name"][:512]] * n,  # case_name
-            [meta["court"]]          * n,   # court
-            [meta["year"]]           * n,   # year
-            [opinion_type]           * n,   # opinion_type
+            [meta["court"]]           * n,  # court
+            [meta["year"]]            * n,  # year
+            [opinion_type]            * n,  # opinion_type
             list(range(n)),                  # chunk_index
             [c[:65535] for c in enriched],  # text
+            [citation[:512]]          * n,  # citation
             embeddings.tolist(),             # vector
         ])
 
@@ -362,6 +408,18 @@ def bulk_ingest_worker(
         if not sc_clusters:
             status_tracker["message"] = "No SC clusters found — aborting."
             return
+
+        # ── Phase 2.5: citations ─────────────────────────────────────────────
+        status_tracker["phase"] = "citations"
+        sc_citations = _collect_sc_citations(s3, set(sc_clusters.keys()))
+        if not status_tracker["is_running"]:
+            status_tracker["message"] = "Stopped during Phase 2.5 (citations)."
+            return
+        # Attach citation strings to cluster metadata
+        for cid, cite_str in sc_citations.items():
+            if cid in sc_clusters:
+                sc_clusters[cid]["citation"] = cite_str
+        del sc_citations  # free memory
 
         # ── Phase 3: opinions ────────────────────────────────────────────────
         status_tracker["phase"]          = "opinions"

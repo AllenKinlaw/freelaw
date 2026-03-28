@@ -60,6 +60,7 @@ def enrich_chunk(
     court: str,
     year: int,
     opinion_type: str,
+    citation: str = "",
 ) -> str:
     """
     Prepend a metadata header to each chunk so the LLM always knows the source
@@ -70,8 +71,14 @@ def enrich_chunk(
         "scctapp": "SC Court of Appeals",
     }.get(court, court)
 
-    header = (
-        f"[Source: {case_name} | Court: {court_label} | "
-        f"Year: {year} | Opinion Type: {opinion_type}]\n\n"
-    )
+    parts = [
+        f"Source: {case_name}",
+        f"Court: {court_label}",
+        f"Year: {year}",
+        f"Opinion Type: {opinion_type}",
+    ]
+    if citation:
+        parts.append(f"Citation: {citation}")
+
+    header = f"[{' | '.join(parts)}]\n\n"
     return header + chunk
