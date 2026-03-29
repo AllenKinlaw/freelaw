@@ -4,6 +4,7 @@ aws/
 backend/.env
 backend/sc_ingestion_progress.json
 backend/laws_ingest_progress.json
+backend/bulk_ingest_cache/
 
 # SC Code of Laws source data (large local files, not for version control)
 sc_code/

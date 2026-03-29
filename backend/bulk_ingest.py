@@ -7,6 +7,20 @@ Pipeline (no large downloads — everything streams from S3):
   Phase 2.5 – citations CSV        → attach citation strings to SC clusters
   Phase 3   – opinions CSV         → chunk → embed → upsert to Milvus
 
+Caching & graceful restart
+──────────────────────────
+Phase 1/2/2.5 results are saved to CACHE_DIR after completion, keyed by the
+S3 bulk-data date and year-range filter.  On the next run those phases are
+skipped entirely — only Phase 3 is re-run.
+
+Phase 3 saves a progress checkpoint (last successfully upserted opinion_id)
+after every CHECKPOINT_EVERY opinions.  If the process is killed, the next
+run streams through the opinions CSV, skips everything up to that id, and
+continues from where it left off.
+
+Cache is invalidated automatically when the S3 bulk-data date changes
+(CourtListener publishes new snapshots periodically).
+
 Public bucket access (no AWS credentials required):
   s3://com-courtlistener-storage/bulk-data/
 """
@@ -14,9 +28,11 @@ Public bucket access (no AWS credentials required):
 import bz2
 import csv
 import io
+import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import boto3
 from botocore import UNSIGNED
@@ -28,10 +44,12 @@ from chunker import enrich_chunk, legal_chunker
 from ingestion import status_tracker  # shared live-status dict
 
 # ── Constants ────────────────────────────────────────────────────────────────
-S3_BUCKET   = "com-courtlistener-storage"
-S3_PREFIX   = "bulk-data"
-SC_COURTS   = {"sc", "scctapp"}
-EMBED_BATCH = 16
+S3_BUCKET        = "com-courtlistener-storage"
+S3_PREFIX        = "bulk-data"
+SC_COURTS        = {"sc", "scctapp"}
+EMBED_BATCH      = 16
+CHECKPOINT_EVERY = 100          # save Phase 3 progress every N opinions
+CACHE_DIR        = Path("bulk_ingest_cache")
 
 _model: SentenceTransformer | None = None
 
@@ -59,11 +77,7 @@ def _s3_client():
 
 
 def _find_latest_key(s3, file_prefix: str) -> str:
-    """
-    List the bucket and return the key of the most recent bz2 CSV whose name
-    starts with *file_prefix* (e.g. 'dockets', 'opinions').
-    Date stamps are YYYY-MM-DD so lexicographic sort == chronological sort.
-    """
+    """Return the S3 key of the most recent bz2 CSV matching *file_prefix*."""
     resp = s3.list_objects_v2(
         Bucket=S3_BUCKET,
         Prefix=f"{S3_PREFIX}/{file_prefix}",
@@ -79,6 +93,12 @@ def _find_latest_key(s3, file_prefix: str) -> str:
             f"matching prefix '{file_prefix}'"
         )
     return sorted(keys)[-1]
+
+
+def _date_from_key(key: str) -> str:
+    """Extract YYYY-MM-DD from an S3 key like 'bulk-data/dockets-2025-12-31.csv.bz2'."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", key)
+    return m.group(1) if m else "unknown"
 
 
 # ── Streaming bz2 CSV reader ─────────────────────────────────────────────────
@@ -102,7 +122,6 @@ class _S3Bz2Stream(io.RawIOBase):
         return True
 
     def readinto(self, b: bytearray) -> int:
-        # Refill internal buffer from S3 + bz2 until we have enough bytes
         while not self._eof and len(self._buf) < len(b):
             raw = self._body.read(self._chunk_size)
             if not raw:
@@ -136,13 +155,100 @@ def _strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _atomic_write(path: Path, data: dict) -> None:
+    """Write JSON atomically via a temp file to avoid corrupt files on crash."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    tmp.replace(path)
+
+
+# ── Cache helpers ─────────────────────────────────────────────────────────────
+
+def _year_tag(start_year: int | None, end_year: int | None) -> str:
+    return f"{start_year or 'all'}_{end_year or 'all'}"
+
+
+def _dockets_cache_path(date: str) -> Path:
+    return CACHE_DIR / f"dockets_{date}.json"
+
+
+def _clusters_cache_path(date: str, start_year, end_year) -> Path:
+    return CACHE_DIR / f"clusters_{date}_{_year_tag(start_year, end_year)}.json"
+
+
+def _opinions_progress_path(date: str, start_year, end_year) -> Path:
+    return CACHE_DIR / f"opinions_progress_{date}_{_year_tag(start_year, end_year)}.json"
+
+
+def _load_dockets_cache(date: str) -> dict[str, str] | None:
+    path = _dockets_cache_path(date)
+    if path.exists():
+        print(f"[BulkIngest] Phase 1 cache hit — loading {path.name}")
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
+def _save_dockets_cache(date: str, data: dict[str, str]) -> None:
+    _atomic_write(_dockets_cache_path(date), data)
+    print(f"[BulkIngest] Phase 1 cached → {_dockets_cache_path(date).name}")
+
+
+def _load_clusters_cache(date: str, start_year, end_year) -> dict[str, dict] | None:
+    path = _clusters_cache_path(date, start_year, end_year)
+    if path.exists():
+        print(f"[BulkIngest] Phase 2/2.5 cache hit — loading {path.name}")
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
+def _save_clusters_cache(date: str, start_year, end_year, data: dict[str, dict]) -> None:
+    path = _clusters_cache_path(date, start_year, end_year)
+    _atomic_write(path, data)
+    print(f"[BulkIngest] Phase 2/2.5 cached → {path.name}")
+
+
+def _load_opinions_progress(date: str, start_year, end_year) -> dict | None:
+    path = _opinions_progress_path(date, start_year, end_year)
+    if path.exists():
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
+def _save_opinions_progress(date: str, start_year, end_year, last_opinion_id: str) -> None:
+    _atomic_write(
+        _opinions_progress_path(date, start_year, end_year),
+        {
+            "last_opinion_id":    last_opinion_id,
+            "opinions_processed": status_tracker["opinions_processed"],
+            "chunks_upserted":    status_tracker["chunks_upserted"],
+            "saved_at":           datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def _clear_opinions_progress(date: str, start_year, end_year) -> None:
+    path = _opinions_progress_path(date, start_year, end_year)
+    path.unlink(missing_ok=True)
+
+
 # ── Phase 1 ───────────────────────────────────────────────────────────────────
 
-def _collect_sc_dockets(s3) -> dict[str, str]:
-    """Return {docket_id: court_id} for all SC / SCCtApp dockets."""
-    key = _find_latest_key(s3, "dockets")
-    status_tracker["message"] = f"Phase 1/3: Scanning dockets … (key: {key.split('/')[-1]})"
+def _collect_sc_dockets(s3) -> tuple[dict[str, str], str]:
+    """Return ({docket_id: court_id}, s3_date).  Uses cache if available."""
+    key  = _find_latest_key(s3, "dockets")
+    date = _date_from_key(key)
 
+    cached = _load_dockets_cache(date)
+    if cached is not None:
+        status_tracker["message"] = f"Phase 1/3: Loaded {len(cached):,} SC dockets from cache."
+        return cached, date
+
+    status_tracker["message"] = f"Phase 1/3: Scanning dockets … (key: {key.split('/')[-1]})"
     sc_dockets: dict[str, str] = {}
     total = 0
 
@@ -158,7 +264,11 @@ def _collect_sc_dockets(s3) -> dict[str, str]:
             sc_dockets[row["id"]] = row["court_id"]
 
     print(f"[BulkIngest] Phase 1 done: {len(sc_dockets):,} SC dockets / {total:,} total")
-    return sc_dockets
+
+    if status_tracker["is_running"]:
+        _save_dockets_cache(date, sc_dockets)
+
+    return sc_dockets, date
 
 
 # ── Phase 2 ───────────────────────────────────────────────────────────────────
@@ -169,11 +279,7 @@ def _collect_sc_clusters(
     start_year: int | None = None,
     end_year:   int | None = None,
 ) -> dict[str, dict]:
-    """Return {cluster_id: {case_name, court, year}} for SC opinion clusters.
-
-    If start_year / end_year are provided, only clusters whose date_filed falls
-    within [start_year, end_year] (inclusive) are kept.
-    """
+    """Return {cluster_id: {case_name, court, year}} for SC opinion clusters."""
     key        = _find_latest_key(s3, "opinion-clusters")
     year_label = (
         f"{start_year}–{end_year}" if start_year and end_year
@@ -206,7 +312,6 @@ def _collect_sc_clusters(
         except ValueError:
             year = 0
 
-        # Apply year range filter
         if start_year and year and year < start_year:
             continue
         if end_year and year and year > end_year:
@@ -232,12 +337,7 @@ def _collect_sc_clusters(
 # ── Phase 2.5 ─────────────────────────────────────────────────────────────────
 
 def _collect_sc_citations(s3, sc_cluster_ids: set) -> dict[str, str]:
-    """Return {cluster_id: "vol reporter page[, vol reporter page, ...]"} for SC clusters.
-
-    Streams the citations CSV (volume, reporter, page, cluster_id) and builds a
-    comma-separated citation string per cluster, e.g. "272 S.C. 120, 251 S.E.2d 890".
-    Only clusters already in sc_cluster_ids are kept.
-    """
+    """Return {cluster_id: "vol reporter page, …"} for SC clusters."""
     key = _find_latest_key(s3, "citations")
     status_tracker["message"] = f"Phase 2.5/3: Collecting citations … (key: {key.split('/')[-1]})"
 
@@ -263,7 +363,7 @@ def _collect_sc_citations(s3, sc_cluster_ids: set) -> dict[str, str]:
         if not (vol and rep and pg):
             continue
 
-        cite = f"{vol} {rep} {pg}"
+        cite     = f"{vol} {rep} {pg}"
         existing = sc_citations.get(cluster_id, "")
         sc_citations[cluster_id] = f"{existing}, {cite}" if existing else cite
 
@@ -273,19 +373,53 @@ def _collect_sc_citations(s3, sc_cluster_ids: set) -> dict[str, str]:
 
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
 
-def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) -> None:
-    """Stream opinions, filter for SC, chunk → embed → upsert to Milvus."""
-    key = _find_latest_key(s3, "opinions")
-    status_tracker["message"] = f"Phase 3/3: Processing opinions … (key: {key.split('/')[-1]})"
+def _process_opinions(
+    s3,
+    sc_clusters:      dict[str, dict],
+    collection:       Collection,
+    date:             str,
+    start_year:       int | None,
+    end_year:         int | None,
+    resume_opinion_id: str | None = None,
+) -> None:
+    """Stream opinions, filter for SC, chunk → embed → upsert to Milvus.
 
-    model = _get_model()
-    total = skipped = 0
+    If resume_opinion_id is set, rows are skipped until that id is passed,
+    then processing continues normally.  Progress is checkpointed every
+    CHECKPOINT_EVERY opinions so restarts lose at most that many opinions.
+    """
+    key = _find_latest_key(s3, "opinions")
+    if resume_opinion_id:
+        status_tracker["message"] = (
+            f"Phase 3/3: Resuming after opinion {resume_opinion_id} … (key: {key.split('/')[-1]})"
+        )
+    else:
+        status_tracker["message"] = f"Phase 3/3: Processing opinions … (key: {key.split('/')[-1]})"
+
+    model    = _get_model()
+    total    = skipped = 0
+    skipping = resume_opinion_id is not None
+    since_checkpoint = 0
 
     for row in _stream_csv(s3, S3_BUCKET, key):
         if not status_tracker["is_running"]:
             break
 
         total += 1
+        raw_id     = row.get("id", "")
+        opinion_id = raw_id
+
+        # Resume: fast-forward until we pass the last checkpointed opinion
+        if skipping:
+            if opinion_id == resume_opinion_id:
+                skipping = False
+            skipped += 1
+            if total % 500_000 == 0:
+                status_tracker["message"] = (
+                    f"Phase 3/3: Fast-forwarding to resume point … {total:,} rows scanned"
+                )
+            continue
+
         if total % 100_000 == 0:
             status_tracker["message"] = (
                 f"Phase 3/3: Scanned {total:,} opinions | "
@@ -298,7 +432,6 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
             skipped += 1
             continue
 
-        # Prefer plain_text; fall back to html_with_citations
         text = (row.get("plain_text") or "").strip()
         if not text:
             html = (row.get("html_with_citations") or "").strip()
@@ -309,16 +442,14 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
             continue
 
         meta         = sc_clusters[cluster_id]
-        raw_id       = row.get("id", "")
-        opinion_id   = int(raw_id) if raw_id.isdigit() else 0
+        opinion_id_i = int(raw_id) if raw_id.isdigit() else 0
         opinion_type = str(row.get("type", "Lead"))[:50]
+        citation     = meta.get("citation", "")
 
         chunks = legal_chunker(text)
         if not chunks:
             skipped += 1
             continue
-
-        citation = meta.get("citation", "")
 
         enriched   = [
             enrich_chunk(c, meta["case_name"], meta["court"], meta["year"], opinion_type, citation)
@@ -326,11 +457,11 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
         ]
         embeddings = model.encode(enriched, batch_size=EMBED_BATCH, show_progress_bar=False)
 
-        n = len(enriched)
+        n              = len(enriched)
         cluster_id_int = int(cluster_id) if cluster_id.isdigit() else 0
 
         collection.insert([
-            [opinion_id]              * n,  # opinion_id
+            [opinion_id_i]            * n,  # opinion_id
             [cluster_id_int]          * n,  # cluster_id
             [meta["case_name"][:512]] * n,  # case_name
             [meta["court"]]           * n,  # court
@@ -346,6 +477,19 @@ def _process_opinions(s3, sc_clusters: dict[str, dict], collection: Collection) 
         status_tracker["chunks_upserted"]    += n
         status_tracker["current_year"]        = meta["year"]
         status_tracker["current_court"]       = meta["court"]
+
+        since_checkpoint += 1
+        if since_checkpoint >= CHECKPOINT_EVERY:
+            _save_opinions_progress(date, start_year, end_year, opinion_id)
+            since_checkpoint = 0
+
+    # Save final checkpoint position (or clear it if complete)
+    if not status_tracker["is_running"]:
+        # Killed mid-run — save where we stopped
+        _save_opinions_progress(date, start_year, end_year, opinion_id)
+    else:
+        # Completed normally — remove progress file so next run starts clean
+        _clear_opinions_progress(date, start_year, end_year)
 
     print(
         f"[BulkIngest] Phase 3 done: "
@@ -363,10 +507,11 @@ def bulk_ingest_worker(
     end_year:    int | None = None,
 ) -> None:
     """
-    Full bulk S3 ingestion pipeline.
-    Runs as a FastAPI BackgroundTask — updates status_tracker throughout.
+    Full bulk S3 ingestion pipeline with caching and graceful restart.
 
-    start_year / end_year: optional inclusive year bounds (None = no limit).
+    Phases 1/2/2.5 are cached by S3 date + year range and skipped on
+    subsequent runs.  Phase 3 checkpoints every CHECKPOINT_EVERY opinions
+    so restarts resume from the last saved position.
     """
     year_label = (
         f"{start_year}–{end_year}" if start_year and end_year
@@ -390,8 +535,8 @@ def bulk_ingest_worker(
     try:
         s3 = _s3_client()
 
-        # ── Phase 1: dockets ────────────────────────────────────────────────
-        sc_dockets = _collect_sc_dockets(s3)
+        # ── Phase 1: dockets (cached) ────────────────────────────────────────
+        sc_dockets, date = _collect_sc_dockets(s3)
         if not status_tracker["is_running"]:
             status_tracker["message"] = "Stopped during Phase 1 (dockets)."
             return
@@ -399,33 +544,58 @@ def bulk_ingest_worker(
             status_tracker["message"] = "No SC dockets found — aborting."
             return
 
-        # ── Phase 2: opinion clusters ────────────────────────────────────────
+        # ── Phase 2 + 2.5: clusters + citations (cached together) ────────────
         status_tracker["phase"] = "clusters"
-        sc_clusters = _collect_sc_clusters(s3, sc_dockets, start_year, end_year)
-        del sc_dockets  # free memory — no longer needed
-        if not status_tracker["is_running"]:
-            status_tracker["message"] = "Stopped during Phase 2 (clusters)."
-            return
+        sc_clusters = _load_clusters_cache(date, start_year, end_year)
+
+        if sc_clusters is None:
+            # Cache miss — run both phases and save combined result
+            sc_clusters = _collect_sc_clusters(s3, sc_dockets, start_year, end_year)
+            del sc_dockets
+            if not status_tracker["is_running"]:
+                status_tracker["message"] = "Stopped during Phase 2 (clusters)."
+                return
+            if not sc_clusters:
+                status_tracker["message"] = "No SC clusters found — aborting."
+                return
+
+            status_tracker["phase"] = "citations"
+            sc_citations = _collect_sc_citations(s3, set(sc_clusters.keys()))
+            if not status_tracker["is_running"]:
+                status_tracker["message"] = "Stopped during Phase 2.5 (citations)."
+                return
+            for cid, cite_str in sc_citations.items():
+                if cid in sc_clusters:
+                    sc_clusters[cid]["citation"] = cite_str
+            del sc_citations
+
+            _save_clusters_cache(date, start_year, end_year, sc_clusters)
+        else:
+            del sc_dockets  # not needed when clusters loaded from cache
+            status_tracker["message"] = (
+                f"Phases 1/2/2.5 loaded from cache ({len(sc_clusters):,} SC clusters)."
+            )
+
         if not sc_clusters:
             status_tracker["message"] = "No SC clusters found — aborting."
             return
 
-        # ── Phase 2.5: citations ─────────────────────────────────────────────
-        status_tracker["phase"] = "citations"
-        sc_citations = _collect_sc_citations(s3, set(sc_clusters.keys()))
-        if not status_tracker["is_running"]:
-            status_tracker["message"] = "Stopped during Phase 2.5 (citations)."
-            return
-        # Attach citation strings to cluster metadata
-        for cid, cite_str in sc_citations.items():
-            if cid in sc_clusters:
-                sc_clusters[cid]["citation"] = cite_str
-        del sc_citations  # free memory
-
-        # ── Phase 3: opinions ────────────────────────────────────────────────
+        # ── Phase 3: opinions (with resume support) ──────────────────────────
         status_tracker["phase"]          = "opinions"
         status_tracker["total_expected"] = len(sc_clusters)
-        _process_opinions(s3, sc_clusters, collection)
+
+        progress      = _load_opinions_progress(date, start_year, end_year)
+        resume_id     = None
+        if progress:
+            resume_id = progress.get("last_opinion_id")
+            status_tracker["opinions_processed"] = progress.get("opinions_processed", 0)
+            status_tracker["chunks_upserted"]    = progress.get("chunks_upserted", 0)
+            print(
+                f"[BulkIngest] Resuming Phase 3 after opinion {resume_id} "
+                f"({status_tracker['opinions_processed']:,} already done)"
+            )
+
+        _process_opinions(s3, sc_clusters, collection, date, start_year, end_year, resume_id)
 
         if status_tracker["is_running"]:
             status_tracker["phase"]   = "done"
