@@ -47,7 +47,7 @@ from ingestion import status_tracker  # shared live-status dict
 S3_BUCKET        = "com-courtlistener-storage"
 S3_PREFIX        = "bulk-data"
 SC_COURTS        = {"sc", "scctapp"}
-EMBED_BATCH      = 16
+EMBED_BATCH      = 64
 CHECKPOINT_EVERY = 100          # save Phase 3 progress every N opinions
 CACHE_DIR        = Path("bulk_ingest_cache")
 
