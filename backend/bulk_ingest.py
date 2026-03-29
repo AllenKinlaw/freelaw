@@ -120,6 +120,7 @@ class _S3Bz2Stream(io.RawIOBase):
 
 def _stream_csv(s3, bucket: str, key: str):
     """Yield csv.DictReader rows from a bz2-compressed S3 CSV (streaming, no disk)."""
+    csv.field_size_limit(10 * 1024 * 1024)  # some opinion fields exceed the 128 KB default
     print(f"[BulkIngest] Streaming  s3://{bucket}/{key}")
     obj         = s3.get_object(Bucket=bucket, Key=key)
     raw_stream  = _S3Bz2Stream(obj["Body"])
