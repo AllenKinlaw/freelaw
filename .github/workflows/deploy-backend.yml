@@ -32,6 +32,7 @@ jobs:
             backend/milvus_client.py \
             backend/laws_milvus.py \
             backend/laws_ingest.py \
+            backend/laws_app.py \
             backend/progress.py \
             backend/requirements.txt \
             backend/start.sh \
