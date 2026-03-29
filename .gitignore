@@ -1,7 +1,12 @@
 # Secrets & credentials — never commit these
 AWS/
+aws/
 backend/.env
 backend/sc_ingestion_progress.json
+backend/laws_ingest_progress.json
+
+# SC Code of Laws source data (large local files, not for version control)
+sc_code/
 
 # Python
 backend/__pycache__/

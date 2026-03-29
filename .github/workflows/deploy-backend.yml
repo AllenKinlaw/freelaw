@@ -30,6 +30,8 @@ jobs:
             backend/court_stats.py \
             backend/chunker.py \
             backend/milvus_client.py \
+            backend/laws_milvus.py \
+            backend/laws_ingest.py \
             backend/progress.py \
             backend/requirements.txt \
             backend/start.sh \
