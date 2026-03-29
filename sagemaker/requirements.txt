@@ -1,0 +1,5 @@
+# Extra dependencies installed on top of the HuggingFace PyTorch GPU base image.
+# torch, transformers, sentence-transformers are already in the base image.
+pymilvus>=2.4.0
+pandas>=2.0.0
+pyarrow>=14.0.0
