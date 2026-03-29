@@ -1,0 +1,71 @@
+{
+  "Comment": "FreeLaw CourtListener ETL pipeline — runs Job1 → Job2 → Job3 in sequence",
+  "StartAt": "Job1_Dockets",
+  "States": {
+
+    "Job1_Dockets": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "freelaw-etl-dockets",
+        "Arguments": {
+          "--output_bucket.$": "$.output_bucket"
+        }
+      },
+      "ResultPath": "$.job1_result",
+      "Next": "Job2_Clusters",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PipelineFailed",
+        "ResultPath": "$.error"
+      }]
+    },
+
+    "Job2_Clusters": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "freelaw-etl-clusters",
+        "Arguments": {
+          "--output_bucket.$": "$.output_bucket"
+        }
+      },
+      "ResultPath": "$.job2_result",
+      "Next": "Job3_Opinions",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PipelineFailed",
+        "ResultPath": "$.error"
+      }]
+    },
+
+    "Job3_Opinions": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "freelaw-etl-opinions",
+        "Arguments": {
+          "--output_bucket.$": "$.output_bucket"
+        }
+      },
+      "ResultPath": "$.job3_result",
+      "Next": "PipelineSucceeded",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PipelineFailed",
+        "ResultPath": "$.error"
+      }]
+    },
+
+    "PipelineSucceeded": {
+      "Type": "Succeed"
+    },
+
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "ETLPipelineFailed",
+      "Cause": "One or more Glue jobs failed. Check CloudWatch logs for details."
+    }
+
+  }
+}
