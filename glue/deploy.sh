@@ -172,14 +172,14 @@ COMMON_ARGS=(
 )
 
 create_or_update_job() {
-  local NAME=$1; local SCRIPT=$2; local WORKERS=$3; local TYPE=$4
+  local NAME=$1; local SCRIPT=$2; local WORKERS=$3; local TYPE=$4; local TIMEOUT=${5:-480}
   local SCRIPT_PATH="s3://${BUCKET}/${GLUE_SCRIPTS_PREFIX}/${SCRIPT}"
 
   if aws glue get-job --job-name "$NAME" --region "$REGION" 2>/dev/null; then
     aws glue update-job --job-name "$NAME" --region "$REGION" \
-      --job-update "Role=${GLUE_ROLE_ARN},Command={Name=glueetl,ScriptLocation=${SCRIPT_PATH},PythonVersion=3},WorkerType=${TYPE},NumberOfWorkers=${WORKERS},GlueVersion=4.0,DefaultArguments={\"--extra-py-files\":\"s3://${BUCKET}/${GLUE_SCRIPTS_PREFIX}/glue_common.py\",\"--output_bucket\":\"${BUCKET}\"}" \
+      --job-update "Role=${GLUE_ROLE_ARN},Command={Name=glueetl,ScriptLocation=${SCRIPT_PATH},PythonVersion=3},WorkerType=${TYPE},NumberOfWorkers=${WORKERS},GlueVersion=4.0,Timeout=${TIMEOUT},DefaultArguments={\"--extra-py-files\":\"s3://${BUCKET}/${GLUE_SCRIPTS_PREFIX}/glue_common.py\",\"--output_bucket\":\"${BUCKET}\"}" \
       > /dev/null
-    echo "  Updated $NAME"
+    echo "  Updated $NAME (timeout: ${TIMEOUT} min)"
   else
     aws glue create-job --name "$NAME" --region "$REGION" \
       --role "$GLUE_ROLE_ARN" \
@@ -187,15 +187,16 @@ create_or_update_job() {
       --glue-version "4.0" \
       --worker-type "$TYPE" \
       --number-of-workers "$WORKERS" \
+      --timeout "$TIMEOUT" \
       --default-arguments "{\"--extra-py-files\":\"s3://${BUCKET}/${GLUE_SCRIPTS_PREFIX}/glue_common.py\",\"--output_bucket\":\"${BUCKET}\"}" \
       > /dev/null
-    echo "  Created $NAME ($WORKERS x $TYPE workers)"
+    echo "  Created $NAME ($WORKERS x $TYPE workers, timeout: ${TIMEOUT} min)"
   fi
 }
 
-create_or_update_job "freelaw-etl-dockets"  "job1_dockets.py"  2 "G.1X"
-create_or_update_job "freelaw-etl-clusters" "job2_clusters.py" 4 "G.1X"
-create_or_update_job "freelaw-etl-opinions" "job3_opinions.py" 8 "G.1X"
+create_or_update_job "freelaw-etl-dockets"  "job1_dockets.py"  2 "G.1X"  120
+create_or_update_job "freelaw-etl-clusters" "job2_clusters.py" 4 "G.1X"  120
+create_or_update_job "freelaw-etl-opinions" "job3_opinions.py" 8 "G.1X"  600
 
 # ── 5. Step Functions ─────────────────────────────────────────────────────────
 
