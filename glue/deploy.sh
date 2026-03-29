@@ -194,8 +194,8 @@ create_or_update_job() {
   fi
 }
 
-create_or_update_job "freelaw-etl-dockets"  "job1_dockets.py"  2 "G.1X"  120
-create_or_update_job "freelaw-etl-clusters" "job2_clusters.py" 4 "G.1X"  120
+create_or_update_job "freelaw-etl-dockets"  "job1_dockets.py"  2 "G.1X"  180
+create_or_update_job "freelaw-etl-clusters" "job2_clusters.py" 4 "G.1X"  180
 create_or_update_job "freelaw-etl-opinions" "job3_opinions.py" 8 "G.1X"  600
 
 # ── 5. Step Functions ─────────────────────────────────────────────────────────
