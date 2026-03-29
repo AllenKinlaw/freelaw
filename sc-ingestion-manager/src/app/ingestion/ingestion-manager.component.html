@@ -19,7 +19,22 @@
     </div>
     <p class="fl-message">{{ status.message }}</p>
 
-    <!-- Phase 3 progress bar -->
+    <!-- Phase 3a progress bar — SQLite DB build from S3 -->
+    <div *ngIf="status.phase === 'prefilter'" class="fl-progress-wrap">
+      <div class="fl-progress-bar fl-progress-bar--download">
+        <div class="fl-progress-fill" [style.width.%]="dbScanPct"></div>
+      </div>
+      <span class="fl-progress-label">
+        ~{{ dbScanPct }}% &nbsp;·&nbsp;
+        {{ status.db_rows_scanned | number }} S3 rows scanned &nbsp;·&nbsp;
+        {{ status.db_rows_written | number }} stored
+        <ng-container *ngIf="status.db_courts_total > 0">
+          &nbsp;·&nbsp; {{ status.db_courts_total }} courts
+        </ng-container>
+      </span>
+    </div>
+
+    <!-- Phase 3b progress bar — embed & upsert -->
     <div *ngIf="status.phase === 'opinions' && status.total_expected > 0" class="fl-progress-wrap">
       <div class="fl-progress-bar">
         <div class="fl-progress-fill" [style.width.%]="progressPct"></div>
@@ -64,8 +79,10 @@
   <section class="fl-bulk">
     <h3>Bulk Ingest from S3 <span class="fl-tag">Recommended</span></h3>
     <p class="fl-hint">
-      Streams CourtListener bulk data from S3 — no API key required, no disk usage.
-      Finds all SC &amp; SCCtApp opinions. Optionally restrict to a year range.
+      Streams CourtListener bulk data from S3 — no API key required.
+      Phase 3a builds a local SQLite cache covering ~106 appellate courts (state supremes,
+      federal circuits, SCOTUS). Phase 3b embeds SC &amp; SCCtApp opinions into Milvus.
+      Optionally restrict to a year range.
     </p>
 
     <div class="fl-year-row">
@@ -102,14 +119,27 @@
     <div *ngIf="status.is_running" class="fl-live-ticker">
       <span class="fl-ticker-phase">{{ phaseLabel || 'Running…' }}</span>
       <span class="fl-ticker-sep">·</span>
-      <span>{{ status.opinions_processed | number }} opinions</span>
-      <span class="fl-ticker-sep">·</span>
-      <span>{{ status.chunks_upserted | number }} chunks</span>
+
+      <!-- Phase 3a: SQLite build stats -->
+      <ng-container *ngIf="status.phase === 'prefilter'">
+        <span>{{ status.db_rows_scanned | number }} rows scanned</span>
+        <span class="fl-ticker-sep">·</span>
+        <span>{{ status.db_rows_written | number }} SC written</span>
+        <span *ngIf="dbScanPct > 0" class="fl-ticker-pct">~{{ dbScanPct }}%</span>
+      </ng-container>
+
+      <!-- All other phases: opinion/chunk counters -->
+      <ng-container *ngIf="status.phase !== 'prefilter'">
+        <span>{{ status.opinions_processed | number }} opinions</span>
+        <span class="fl-ticker-sep">·</span>
+        <span>{{ status.chunks_upserted | number }} chunks</span>
+        <span *ngIf="status.phase === 'opinions' && status.total_expected > 0" class="fl-ticker-pct">
+          {{ progressPct }}%
+        </span>
+      </ng-container>
+
       <span *ngIf="elapsed" class="fl-ticker-sep">·</span>
       <span *ngIf="elapsed">⏱ {{ elapsed }}</span>
-      <span *ngIf="status.phase === 'opinions' && status.total_expected > 0" class="fl-ticker-pct">
-        {{ progressPct }}%
-      </span>
     </div>
   </section>
 

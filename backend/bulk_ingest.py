@@ -1,25 +1,28 @@
 """
-bulk_ingest.py – Stream SC court opinions from CourtListener S3 bulk data.
+bulk_ingest.py – Stream appellate court opinions from CourtListener S3 bulk data.
 
 Pipeline (no large downloads — everything streams from S3):
-  Phase 1   – dockets CSV          → collect SC docket IDs  (court_id in {'sc','scctapp'})
-  Phase 2   – opinion_clusters CSV → collect SC cluster metadata  (case_name, year, court)
-  Phase 2.5 – citations CSV        → attach citation strings to SC clusters
-  Phase 3   – opinions CSV         → chunk → embed → upsert to Milvus
+  Phase 1    – dockets CSV          → collect INGEST_COURTS docket IDs
+  Phase 2    – opinion_clusters CSV → collect INGEST_COURTS cluster metadata
+  Phase 2.5  – citations CSV        → attach citation strings to clusters
+  Phase 3a-1 – dockets CSV          → collect DB_COURTS docket IDs (wider set)
+  Phase 3a-2 – opinion_clusters CSV → collect DB_COURTS cluster metadata (all years)
+  Phase 3a   – opinions CSV         → extract text-bearing rows for DB_COURTS → SQLite
+  Phase 3b   – SQLite query         → chunk → embed → upsert to Milvus
+
+Courts
+──────
+DB_COURTS    – all state supreme courts + federal circuits + SCOTUS + state appellate
+               courts (~106 courts).  All text-bearing opinions stored in local SQLite.
+INGEST_COURTS – subset currently being embedded into Milvus (SC only for now).
 
 Caching & graceful restart
 ──────────────────────────
-Phase 1/2/2.5 results are saved to CACHE_DIR after completion, keyed by the
-S3 bulk-data date and year-range filter.  On the next run those phases are
-skipped entirely — only Phase 3 is re-run.
-
-Phase 3 saves a progress checkpoint (last successfully upserted opinion_id)
-after every CHECKPOINT_EVERY opinions.  If the process is killed, the next
-run streams through the opinions CSV, skips everything up to that id, and
-continues from where it left off.
-
-Cache is invalidated automatically when the S3 bulk-data date changes
-(CourtListener publishes new snapshots periodically).
+Phase 1/2/2.5 results cached by S3 date + year range; skipped on subsequent runs.
+Phase 3a-1/3a-2 DB_COURTS dockets + clusters cached by S3 date only.
+Phase 3a SQLite DB cached by S3 date — covers all DB_COURTS courts and years so any
+  court/year combination queries it in milliseconds without another S3 scan.
+Phase 3b checkpoints every CHECKPOINT_EVERY opinions for graceful resume.
 
 Public bucket access (no AWS credentials required):
   s3://com-courtlistener-storage/bulk-data/
@@ -31,6 +34,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,10 +50,41 @@ from ingestion import status_tracker  # shared live-status dict
 # ── Constants ────────────────────────────────────────────────────────────────
 S3_BUCKET        = "com-courtlistener-storage"
 S3_PREFIX        = "bulk-data"
-SC_COURTS        = {"sc", "scctapp"}
 EMBED_BATCH      = 64
-CHECKPOINT_EVERY = 100          # save Phase 3 progress every N opinions
+CHECKPOINT_EVERY = 100          # save Phase 3b progress every N opinions
+MIN_TEXT_LEN     = 150          # skip opinions with less useful text than this
 CACHE_DIR        = Path("bulk_ingest_cache")
+
+# Courts whose opinions get stored in the local SQLite DB (Phase 3a).
+# Superset of INGEST_COURTS — Phase 3b queries are filtered to INGEST_COURTS.
+DB_COURTS: frozenset[str] = frozenset({
+    # US Supreme Court
+    "scotus",
+    # Federal circuits
+    "ca1", "ca2", "ca3", "ca4", "ca5", "ca6", "ca7", "ca8", "ca9",
+    "ca10", "ca11", "cadc", "cafc",
+    # State supreme courts (50 states + DC)
+    "ala", "alaska", "ariz", "ark", "cal", "colo", "conn", "del", "dc",
+    "fla", "ga", "haw", "idaho", "ill", "ind", "iowa", "kan", "ky", "la",
+    "me", "md", "mass", "mich", "minn", "miss", "mo", "mont", "neb", "nev",
+    "nh", "nj", "nm", "ny", "nc", "nd", "ohio", "okla", "or", "pa", "ri",
+    "sc", "sd", "tenn", "tex", "utah", "vt", "va", "wash", "wva", "wis", "wyo",
+    # State courts of appeals
+    "alacivapp", "alacrimapp", "arizctapp", "arkctapp", "calctapp", "coloapp",
+    "connappct", "flaapp", "gaapp", "idahoctapp", "illappct", "indctapp",
+    "iowactapp", "kanctapp", "kyctapp", "laapp", "mdapp", "massappct",
+    "michctapp", "minnctapp", "missctapp", "moapp", "nebctapp",
+    "njsuperctappdiv", "nmctapp", "ncctapp", "ohioctapp", "oklaapp",
+    "oklacrimapp", "orctapp", "pacommwct", "pasuperct", "scctapp",
+    "tennctapp", "tenncrimapp", "texapp", "texcrimapp", "utahctapp",
+    "vaapp", "washctapp", "wisctapp",
+})
+
+# Courts currently being embedded into Milvus (SC only for now).
+INGEST_COURTS: frozenset[str] = frozenset({"sc", "scctapp"})
+
+# Backward-compat alias used in Phase 1/2 helper names
+SC_COURTS = INGEST_COURTS
 
 _model: SentenceTransformer | None = None
 
@@ -148,6 +183,44 @@ def _stream_csv(s3, bucket: str, key: str):
     yield from csv.DictReader(text_stream)
 
 
+def _query_opinions_db(
+    db_path:    Path,
+    start_year: int | None,
+    end_year:   int | None,
+    courts:     list[str] | None = None,
+):
+    """Yield opinion rows from the local SQLite cache.
+
+    Filters by an optional court list and year range so Phase 3b only sees
+    the INGEST_COURTS subset for the requested year window.
+    """
+    print(f"[BulkIngest] Querying local SQLite cache  {db_path.name}")
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+
+    clauses: list[str] = []
+    params:  list      = []
+
+    if courts:
+        placeholders = ",".join("?" * len(courts))
+        clauses.append(f"court IN ({placeholders})")
+        params.extend(courts)
+    if start_year:
+        clauses.append("year >= ?")
+        params.append(start_year)
+    if end_year:
+        clauses.append("year <= ?")
+        params.append(end_year)
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur.execute(f"SELECT * FROM opinions {where} ORDER BY id", params)
+
+    for row in cur:
+        yield dict(row)
+    con.close()
+
+
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def _strip_html(text: str) -> str:
@@ -171,11 +244,48 @@ def _year_tag(start_year: int | None, end_year: int | None) -> str:
 
 
 def _dockets_cache_path(date: str) -> Path:
+    """INGEST_COURTS dockets cache (Phase 1)."""
     return CACHE_DIR / f"dockets_{date}.json"
 
 
 def _clusters_cache_path(date: str, start_year, end_year) -> Path:
+    """INGEST_COURTS clusters cache (Phase 2/2.5) — keyed by year range."""
     return CACHE_DIR / f"clusters_{date}_{_year_tag(start_year, end_year)}.json"
+
+
+def _db_dockets_cache_path(date: str) -> Path:
+    """DB_COURTS dockets cache (Phase 3a-1) — all courts, all years."""
+    return CACHE_DIR / f"db_dockets_{date}.json"
+
+
+def _db_clusters_cache_path(date: str) -> Path:
+    """DB_COURTS clusters cache (Phase 3a-2) — all courts, all years."""
+    return CACHE_DIR / f"db_clusters_{date}.json"
+
+
+def _opinions_db_path(date: str) -> Path:
+    """SQLite DB of text-bearing opinions for DB_COURTS, keyed by S3 date only.
+    Indexed by (court, year) for instant Phase 3b queries.
+    v2 schema adds court + year columns and text filter vs the original SC-only DB.
+    """
+    return CACHE_DIR / f"opinions_v2_{date}.db"
+
+
+def _opinions_meta_path(date: str) -> Path:
+    """JSON storing the total row count of the opinions CSV for this date."""
+    return CACHE_DIR / f"opinions_meta_{date}.json"
+
+
+def _load_opinions_total(date: str) -> int | None:
+    path = _opinions_meta_path(date)
+    if path.exists():
+        with open(path) as f:
+            return json.load(f).get("total_rows")
+    return None
+
+
+def _save_opinions_total(date: str, total_rows: int) -> None:
+    _atomic_write(_opinions_meta_path(date), {"total_rows": total_rows})
 
 
 def _opinions_progress_path(date: str, start_year, end_year) -> Path:
@@ -236,10 +346,10 @@ def _clear_opinions_progress(date: str, start_year, end_year) -> None:
     path.unlink(missing_ok=True)
 
 
-# ── Phase 1 ───────────────────────────────────────────────────────────────────
+# ── Phase 1 — INGEST_COURTS dockets ──────────────────────────────────────────
 
 def _collect_sc_dockets(s3) -> tuple[dict[str, str], str]:
-    """Return ({docket_id: court_id}, s3_date).  Uses cache if available."""
+    """Return ({docket_id: court_id}, s3_date) for INGEST_COURTS.  Uses cache if available."""
     key  = _find_latest_key(s3, "dockets")
     date = _date_from_key(key)
 
@@ -260,7 +370,7 @@ def _collect_sc_dockets(s3) -> tuple[dict[str, str], str]:
             status_tracker["message"] = (
                 f"Phase 1/3: Scanned {total:,} dockets — {len(sc_dockets):,} SC found…"
             )
-        if row.get("court_id") in SC_COURTS:
+        if row.get("court_id") in INGEST_COURTS:
             sc_dockets[row["id"]] = row["court_id"]
 
     print(f"[BulkIngest] Phase 1 done: {len(sc_dockets):,} SC dockets / {total:,} total")
@@ -271,7 +381,7 @@ def _collect_sc_dockets(s3) -> tuple[dict[str, str], str]:
     return sc_dockets, date
 
 
-# ── Phase 2 ───────────────────────────────────────────────────────────────────
+# ── Phase 2 — INGEST_COURTS clusters ─────────────────────────────────────────
 
 def _collect_sc_clusters(
     s3,
@@ -279,7 +389,7 @@ def _collect_sc_clusters(
     start_year: int | None = None,
     end_year:   int | None = None,
 ) -> dict[str, dict]:
-    """Return {cluster_id: {case_name, court, year}} for SC opinion clusters."""
+    """Return {cluster_id: {case_name, court, year}} for INGEST_COURTS opinion clusters."""
     key        = _find_latest_key(s3, "opinion-clusters")
     year_label = (
         f"{start_year}–{end_year}" if start_year and end_year
@@ -334,10 +444,10 @@ def _collect_sc_clusters(
     return sc_clusters
 
 
-# ── Phase 2.5 ─────────────────────────────────────────────────────────────────
+# ── Phase 2.5 — Citations ─────────────────────────────────────────────────────
 
 def _collect_sc_citations(s3, sc_cluster_ids: set) -> dict[str, str]:
-    """Return {cluster_id: "vol reporter page, …"} for SC clusters."""
+    """Return {cluster_id: "vol reporter page, …"} for INGEST_COURTS clusters."""
     key = _find_latest_key(s3, "citations")
     status_tracker["message"] = f"Phase 2.5/3: Collecting citations … (key: {key.split('/')[-1]})"
 
@@ -371,37 +481,262 @@ def _collect_sc_citations(s3, sc_cluster_ids: set) -> dict[str, str]:
     return sc_citations
 
 
-# ── Phase 3 ───────────────────────────────────────────────────────────────────
+# ── Phase 3a-1 — DB_COURTS dockets ───────────────────────────────────────────
+
+def _collect_db_dockets(s3) -> tuple[dict[str, str], str]:
+    """Return ({docket_id: court_id}, s3_date) for all DB_COURTS.  Uses cache."""
+    key  = _find_latest_key(s3, "dockets")
+    date = _date_from_key(key)
+
+    path = _db_dockets_cache_path(date)
+    if path.exists():
+        print(f"[BulkIngest] DB dockets cache hit — {path.name}")
+        status_tracker["message"] = f"Phase 3a-1: Loaded DB dockets from cache."
+        with open(path) as f:
+            return json.load(f), date
+
+    status_tracker["message"] = (
+        f"Phase 3a-1: Scanning dockets for {len(DB_COURTS)} courts… ({key.split('/')[-1]})"
+    )
+    db_dockets: dict[str, str] = {}
+    total = 0
+
+    for row in _stream_csv(s3, S3_BUCKET, key):
+        if not status_tracker["is_running"]:
+            break
+        total += 1
+        if total % 500_000 == 0:
+            status_tracker["message"] = (
+                f"Phase 3a-1: Scanned {total:,} dockets — {len(db_dockets):,} found…"
+            )
+        if row.get("court_id") in DB_COURTS:
+            db_dockets[row["id"]] = row["court_id"]
+
+    print(f"[BulkIngest] DB dockets: {len(db_dockets):,} / {total:,} total rows")
+
+    if status_tracker["is_running"]:
+        _atomic_write(path, db_dockets)
+        print(f"[BulkIngest] DB dockets cached → {path.name}")
+
+    return db_dockets, date
+
+
+# ── Phase 3a-2 — DB_COURTS clusters ──────────────────────────────────────────
+
+def _collect_db_clusters(s3, db_dockets: dict[str, str], date: str) -> dict[str, dict]:
+    """Return {cluster_id: {court, year}} for all DB_COURTS, all years.  Uses cache."""
+    path = _db_clusters_cache_path(date)
+    if path.exists():
+        print(f"[BulkIngest] DB clusters cache hit — {path.name}")
+        status_tracker["message"] = f"Phase 3a-2: Loaded DB clusters from cache."
+        with open(path) as f:
+            return json.load(f)
+
+    key = _find_latest_key(s3, "opinion-clusters")
+    status_tracker["message"] = (
+        f"Phase 3a-2: Scanning clusters for {len(DB_COURTS)} courts… ({key.split('/')[-1]})"
+    )
+    db_clusters: dict[str, dict] = {}
+    total = 0
+
+    for row in _stream_csv(s3, S3_BUCKET, key):
+        if not status_tracker["is_running"]:
+            break
+        total += 1
+        if total % 200_000 == 0:
+            status_tracker["message"] = (
+                f"Phase 3a-2: Scanned {total:,} clusters — {len(db_clusters):,} found…"
+            )
+        docket_id = row.get("docket_id", "")
+        if docket_id not in db_dockets:
+            continue
+
+        date_filed = row.get("date_filed", "") or ""
+        try:
+            year = int(date_filed[:4]) if len(date_filed) >= 4 else 0
+        except ValueError:
+            year = 0
+
+        db_clusters[row["id"]] = {
+            "court": db_dockets[docket_id],
+            "year":  year,
+        }
+
+    print(f"[BulkIngest] DB clusters: {len(db_clusters):,} / {total:,} total rows")
+
+    if status_tracker["is_running"]:
+        _atomic_write(path, db_clusters)
+        print(f"[BulkIngest] DB clusters cached → {path.name}")
+
+    return db_clusters
+
+
+# ── Phase 3a — Build opinions SQLite DB ──────────────────────────────────────
+
+def _build_opinions_db(s3, db_clusters: dict[str, dict], date: str) -> Path:
+    """Stream the full S3 opinions CSV ONCE; write text-bearing rows for DB_COURTS to SQLite.
+
+    • Covers ALL DB_COURTS and ALL years — one DB per S3 snapshot date.
+    • Text-bearing filter: rows with < MIN_TEXT_LEN chars are skipped (eliminates
+      the ~1.4B PACER stub rows that have no opinion text).
+    • Adds court and year columns (from db_clusters lookup) so Phase 3b can query
+      instantly: SELECT * FROM opinions WHERE court IN (…) AND year BETWEEN ? AND ?
+
+    Returns the path to the completed SQLite DB.
+    """
+    db_path = _opinions_db_path(date)
+    key     = _find_latest_key(s3, "opinions")
+    status_tracker["message"] = (
+        f"Phase 3a: Building opinions DB ({len(DB_COURTS)} courts) … ({key.split('/')[-1]})"
+    )
+
+    CACHE_DIR.mkdir(exist_ok=True)
+
+    # Temp path so a killed run never leaves a partial DB that looks valid
+    tmp_path = db_path.with_suffix(".tmp.db")
+    tmp_path.unlink(missing_ok=True)
+
+    con = sqlite3.connect(tmp_path)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("""
+        CREATE TABLE opinions (
+            id                   TEXT PRIMARY KEY,
+            cluster_id           TEXT,
+            court                TEXT,
+            year                 INTEGER,
+            type                 TEXT,
+            plain_text           TEXT,
+            html_with_citations  TEXT
+        )
+    """)
+    con.execute("CREATE INDEX idx_cluster  ON opinions(cluster_id)")
+    con.execute("CREATE INDEX idx_court_yr ON opinions(court, year)")
+    con.commit()
+
+    db_cluster_ids = set(db_clusters.keys())
+    total = db_found = 0
+    BATCH = 500
+    rows_batch: list = []
+
+    def _flush():
+        con.executemany(
+            "INSERT OR IGNORE INTO opinions VALUES (?,?,?,?,?,?,?)",
+            rows_batch,
+        )
+        con.commit()
+        rows_batch.clear()
+
+    status_tracker["db_rows_scanned"] = 0
+    status_tracker["db_rows_written"] = 0
+
+    for row in _stream_csv(s3, S3_BUCKET, key):
+        if not status_tracker["is_running"]:
+            break
+        total += 1
+        if total % 100_000 == 0:
+            status_tracker["db_rows_scanned"] = total
+            status_tracker["db_rows_written"]  = db_found
+            status_tracker["message"] = (
+                f"Phase 3a: Scanned {total:,} opinions — {db_found:,} stored…"
+            )
+
+        cluster_id = row.get("cluster_id", "")
+        if cluster_id not in db_cluster_ids:
+            continue
+
+        # Text-bearing filter — skip stubs with no useful content
+        text = (row.get("plain_text") or "").strip()
+        if not text:
+            html = (row.get("html_with_citations") or "").strip()
+            if html:
+                text = _strip_html(html)
+        if len(text) < MIN_TEXT_LEN:
+            continue
+
+        meta = db_clusters[cluster_id]
+        rows_batch.append((
+            row.get("id", ""),
+            cluster_id,
+            meta["court"],
+            meta["year"],
+            row.get("type", ""),
+            row.get("plain_text", ""),
+            row.get("html_with_citations", ""),
+        ))
+        db_found += 1
+
+        if len(rows_batch) >= BATCH:
+            _flush()
+            status_tracker["db_rows_written"] = db_found
+
+    if rows_batch:
+        _flush()
+
+    con.close()
+
+    if status_tracker["is_running"]:
+        # Atomic promote temp → final
+        tmp_path.replace(db_path)
+        mb = db_path.stat().st_size / 1024 / 1024
+        status_tracker["db_rows_scanned"] = total
+        status_tracker["db_rows_written"]  = db_found
+        status_tracker["db_total_mb"]      = round(mb, 1)
+        _save_opinions_total(date, total)   # persist for accurate % on future runs
+        print(
+            f"[BulkIngest] Phase 3a done: {db_found:,} opinions stored / {total:,} scanned "
+            f"→ {db_path.name} ({mb:.1f} MB)"
+        )
+    else:
+        tmp_path.unlink(missing_ok=True)
+        print("[BulkIngest] Phase 3a interrupted — temp DB discarded.")
+
+    return db_path
+
+
+# ── Phase 3b — Embed & upsert ─────────────────────────────────────────────────
 
 def _process_opinions(
     s3,
-    sc_clusters:      dict[str, dict],
-    collection:       Collection,
-    date:             str,
-    start_year:       int | None,
-    end_year:         int | None,
-    resume_opinion_id: str | None = None,
+    sc_clusters:       dict[str, dict],
+    collection:        Collection,
+    date:              str,
+    start_year:        int | None,
+    end_year:          int | None,
+    db_path:           Path | None = None,
+    resume_opinion_id: str | None  = None,
 ) -> None:
-    """Stream opinions, filter for SC, chunk → embed → upsert to Milvus.
+    """Chunk → embed → upsert INGEST_COURTS opinions to Milvus.
 
-    If resume_opinion_id is set, rows are skipped until that id is passed,
-    then processing continues normally.  Progress is checkpointed every
-    CHECKPOINT_EVERY opinions so restarts lose at most that many opinions.
+    Reads from the local SQLite DB (Phase 3a output) filtered by INGEST_COURTS
+    and year range.  Falls back to streaming from S3 if the DB doesn't exist.
+    Progress is checkpointed every CHECKPOINT_EVERY opinions for graceful resume.
     """
-    key = _find_latest_key(s3, "opinions")
-    if resume_opinion_id:
-        status_tracker["message"] = (
-            f"Phase 3/3: Resuming after opinion {resume_opinion_id} … (key: {key.split('/')[-1]})"
+    if db_path and db_path.exists():
+        source_label = db_path.name
+        rows = _query_opinions_db(
+            db_path, start_year, end_year,
+            courts=list(INGEST_COURTS),
         )
     else:
-        status_tracker["message"] = f"Phase 3/3: Processing opinions … (key: {key.split('/')[-1]})"
+        key  = _find_latest_key(s3, "opinions")
+        source_label = key.split("/")[-1]
+        rows = _stream_csv(s3, S3_BUCKET, key)
+
+    if resume_opinion_id:
+        status_tracker["message"] = (
+            f"Phase 3b: Resuming after opinion {resume_opinion_id} … ({source_label})"
+        )
+    else:
+        status_tracker["message"] = f"Phase 3b: Processing opinions … ({source_label})"
 
     model    = _get_model()
     total    = skipped = 0
     skipping = resume_opinion_id is not None
     since_checkpoint = 0
+    opinion_id = ""
 
-    for row in _stream_csv(s3, S3_BUCKET, key):
+    for row in rows:
         if not status_tracker["is_running"]:
             break
 
@@ -437,7 +772,7 @@ def _process_opinions(
             html = (row.get("html_with_citations") or "").strip()
             if html:
                 text = _strip_html(html)
-        if len(text) < 150:
+        if len(text) < MIN_TEXT_LEN:
             skipped += 1
             continue
 
@@ -483,16 +818,14 @@ def _process_opinions(
             _save_opinions_progress(date, start_year, end_year, opinion_id)
             since_checkpoint = 0
 
-    # Save final checkpoint position (or clear it if complete)
-    if not status_tracker["is_running"]:
-        # Killed mid-run — save where we stopped
+    # Save final checkpoint (or clear if complete)
+    if not status_tracker["is_running"] and opinion_id:
         _save_opinions_progress(date, start_year, end_year, opinion_id)
     else:
-        # Completed normally — remove progress file so next run starts clean
         _clear_opinions_progress(date, start_year, end_year)
 
     print(
-        f"[BulkIngest] Phase 3 done: "
+        f"[BulkIngest] Phase 3b done: "
         f"scanned {total:,} | "
         f"processed {status_tracker['opinions_processed']:,} | "
         f"skipped {skipped:,}"
@@ -509,9 +842,10 @@ def bulk_ingest_worker(
     """
     Full bulk S3 ingestion pipeline with caching and graceful restart.
 
-    Phases 1/2/2.5 are cached by S3 date + year range and skipped on
-    subsequent runs.  Phase 3 checkpoints every CHECKPOINT_EVERY opinions
-    so restarts resume from the last saved position.
+    Phases 1/2/2.5 (INGEST_COURTS) and Phase 3a-1/3a-2 (DB_COURTS) are each
+    cached by S3 date and skipped on subsequent runs.  Phase 3b checkpoints
+    every CHECKPOINT_EVERY opinions so restarts resume from the last saved
+    position.
     """
     year_label = (
         f"{start_year}–{end_year}" if start_year and end_year
@@ -530,12 +864,17 @@ def bulk_ingest_worker(
         "phase":              "dockets",
         "started_at":         datetime.now(timezone.utc).isoformat(),
         "message":            f"Starting bulk S3 ingest ({year_label})…",
+        "db_rows_scanned":    0,
+        "db_rows_written":    0,
+        "db_rows_total":      0,
+        "db_total_mb":        0.0,
+        "db_courts_total":    len(DB_COURTS),
     })
 
     try:
         s3 = _s3_client()
 
-        # ── Phase 1: dockets (cached) ────────────────────────────────────────
+        # ── Phase 1: INGEST_COURTS dockets (cached) ──────────────────────────
         sc_dockets, date = _collect_sc_dockets(s3)
         if not status_tracker["is_running"]:
             status_tracker["message"] = "Stopped during Phase 1 (dockets)."
@@ -544,12 +883,11 @@ def bulk_ingest_worker(
             status_tracker["message"] = "No SC dockets found — aborting."
             return
 
-        # ── Phase 2 + 2.5: clusters + citations (cached together) ────────────
+        # ── Phase 2 + 2.5: INGEST_COURTS clusters + citations (cached) ───────
         status_tracker["phase"] = "clusters"
         sc_clusters = _load_clusters_cache(date, start_year, end_year)
 
         if sc_clusters is None:
-            # Cache miss — run both phases and save combined result
             sc_clusters = _collect_sc_clusters(s3, sc_dockets, start_year, end_year)
             del sc_dockets
             if not status_tracker["is_running"]:
@@ -571,7 +909,7 @@ def bulk_ingest_worker(
 
             _save_clusters_cache(date, start_year, end_year, sc_clusters)
         else:
-            del sc_dockets  # not needed when clusters loaded from cache
+            del sc_dockets
             status_tracker["message"] = (
                 f"Phases 1/2/2.5 loaded from cache ({len(sc_clusters):,} SC clusters)."
             )
@@ -580,22 +918,80 @@ def bulk_ingest_worker(
             status_tracker["message"] = "No SC clusters found — aborting."
             return
 
-        # ── Phase 3: opinions (with resume support) ──────────────────────────
+        # ── Phase 3a: build broad opinions SQLite DB ──────────────────────────
+        status_tracker["phase"]        = "prefilter"
+        status_tracker["db_courts_total"] = len(DB_COURTS)
+        db_path = _opinions_db_path(date)
+
+        # Load known row total for accurate progress % (set after first full scan)
+        known_total = _load_opinions_total(date)
+        if known_total:
+            status_tracker["db_rows_total"] = known_total
+
+        if db_path.exists():
+            mb = db_path.stat().st_size / 1024 / 1024
+            print(f"[BulkIngest] Phase 3a cache hit — {db_path.name} ({mb:.1f} MB)")
+            status_tracker["message"] = (
+                f"Phase 3a: Opinions DB ready ({mb:.1f} MB, {len(DB_COURTS)} courts) — "
+                f"skipping S3 scan."
+            )
+        else:
+            # Need to build the DB — first collect DB_COURTS dockets + clusters
+            db_clusters_cache = _db_clusters_cache_path(date)
+            if db_clusters_cache.exists():
+                with open(db_clusters_cache) as f:
+                    db_clusters_for_build = json.load(f)
+                print(
+                    f"[BulkIngest] DB clusters cache hit — "
+                    f"{len(db_clusters_for_build):,} entries"
+                )
+                status_tracker["message"] = (
+                    f"Phase 3a: Loaded {len(db_clusters_for_build):,} clusters from cache."
+                )
+            else:
+                # Phase 3a-1: collect DB_COURTS dockets
+                db_dockets_for_build, _ = _collect_db_dockets(s3)
+                if not status_tracker["is_running"]:
+                    status_tracker["message"] = "Stopped during Phase 3a-1 (DB dockets)."
+                    return
+                if not db_dockets_for_build:
+                    status_tracker["message"] = "No DB_COURTS dockets found — aborting."
+                    return
+
+                # Phase 3a-2: collect DB_COURTS clusters (all years)
+                db_clusters_for_build = _collect_db_clusters(
+                    s3, db_dockets_for_build, date
+                )
+                del db_dockets_for_build
+                if not status_tracker["is_running"]:
+                    status_tracker["message"] = "Stopped during Phase 3a-2 (DB clusters)."
+                    return
+
+            _build_opinions_db(s3, db_clusters_for_build, date)
+            del db_clusters_for_build
+            if not status_tracker["is_running"]:
+                status_tracker["message"] = "Stopped during Phase 3a (building opinions DB)."
+                return
+
+        # ── Phase 3b: embed & upsert (with resume support) ───────────────────
         status_tracker["phase"]          = "opinions"
         status_tracker["total_expected"] = len(sc_clusters)
 
-        progress      = _load_opinions_progress(date, start_year, end_year)
-        resume_id     = None
+        progress  = _load_opinions_progress(date, start_year, end_year)
+        resume_id = None
         if progress:
             resume_id = progress.get("last_opinion_id")
             status_tracker["opinions_processed"] = progress.get("opinions_processed", 0)
             status_tracker["chunks_upserted"]    = progress.get("chunks_upserted", 0)
             print(
-                f"[BulkIngest] Resuming Phase 3 after opinion {resume_id} "
+                f"[BulkIngest] Resuming Phase 3b after opinion {resume_id} "
                 f"({status_tracker['opinions_processed']:,} already done)"
             )
 
-        _process_opinions(s3, sc_clusters, collection, date, start_year, end_year, resume_id)
+        _process_opinions(
+            s3, sc_clusters, collection, date, start_year, end_year,
+            db_path=db_path, resume_opinion_id=resume_id,
+        )
 
         if status_tracker["is_running"]:
             status_tracker["phase"]   = "done"

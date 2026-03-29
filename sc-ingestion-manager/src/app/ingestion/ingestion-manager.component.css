@@ -105,6 +105,10 @@ section h3 {
   border-radius: 999px;
   transition: width 0.6s ease;
 }
+/* Phase 3a — amber/orange to distinguish S3 download from embed bar */
+.fl-progress-bar--download .fl-progress-fill {
+  background: linear-gradient(90deg, #d97706, #fbbf24);
+}
 .fl-progress-label {
   font-size: 0.78rem;
   color: #1d4ed8;

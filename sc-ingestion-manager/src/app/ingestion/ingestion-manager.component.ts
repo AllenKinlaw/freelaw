@@ -45,13 +45,18 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
     phase:              'idle',
     total_expected:     0,
     started_at:         null,
+    db_rows_scanned:    0,
+    db_rows_written:    0,
+    db_rows_total:      0,
+    db_total_mb:        0,
+    db_courts_total:    0,
   };
 
   elapsed = '';
 
   backendOnline = false;
   actionMessage = '';
-  readonly version = '2.6.0';
+  readonly version = '2.7.0';
 
   private statusSub?: Subscription;
   private scanPollSub?: Subscription;
@@ -424,7 +429,7 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
       : m > 0 ? `${m}m ${s}s` : `${s}s`;
   }
 
-  /** 0–100 progress percentage for Phase 3 (opinions). */
+  /** 0–100 progress percentage for Phase 3b (embed & upsert). */
   get progressPct(): number {
     if (!this.status.total_expected || this.status.phase !== 'opinions') return 0;
     return Math.min(100, Math.round(
@@ -432,12 +437,27 @@ export class IngestionManagerComponent implements OnInit, OnDestroy {
     ));
   }
 
+  /**
+   * 0–100 for Phase 3a (SQLite build from S3 scan).
+   * Uses the known total row count from a previous completed scan if available,
+   * otherwise falls back to 1.8B (observed empirically from prior runs).
+   */
+  get dbScanPct(): number {
+    if (this.status.phase !== 'prefilter' || !this.status.db_rows_scanned) return 0;
+    const total = this.status.db_rows_total > 0 ? this.status.db_rows_total : 1_800_000_000;
+    return Math.min(99, Math.round((this.status.db_rows_scanned / total) * 100));
+  }
+
   get phaseLabel(): string {
     switch (this.status.phase) {
       case 'dockets':   return 'Phase 1 / 3 — Scanning dockets';
       case 'clusters':  return 'Phase 2 / 3 — Scanning opinion clusters';
-      case 'citations': return 'Phase 2.5 / 3 — Collecting citations';
-      case 'opinions':  return 'Phase 3 / 3 — Embedding & ingesting opinions';
+      case 'citations':  return 'Phase 2.5 / 3 — Collecting citations';
+      case 'prefilter': {
+        const n = this.status.db_courts_total;
+        return `Phase 3a / 3 — Pre-filtering opinions${n ? ' (' + n + ' courts)' : ''} from S3`;
+      }
+      case 'opinions':   return 'Phase 3b / 3 — Embedding & ingesting opinions';
       case 'done':      return 'Complete';
       default:          return '';
     }

@@ -11,9 +11,14 @@ export interface IngestionStatus {
   opinions_processed: number;
   chunks_upserted:    number;
   message:            string;
-  phase:              string;        // idle | dockets | clusters | opinions | done
+  phase:              string;        // idle|dockets|clusters|citations|prefilter|opinions|done
   total_expected:     number;        // SC clusters found in Phase 2
   started_at:         string | null; // ISO-8601 UTC
+  db_rows_scanned:    number;        // Phase 3a: S3 rows read
+  db_rows_written:    number;        // Phase 3a: rows written to SQLite
+  db_rows_total:      number;        // Phase 3a: known total rows (0 = unknown)
+  db_total_mb:        number;        // Phase 3a: final DB size in MB
+  db_courts_total:    number;        // Phase 3a: courts covered in SQLite DB
 }
 
 @Injectable({ providedIn: 'root' })

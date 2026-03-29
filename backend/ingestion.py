@@ -31,9 +31,15 @@ status_tracker: dict = {
     "chunks_upserted":    0,
     "message":            "Idle",
     # bulk-ingest extras
-    "phase":              "idle",   # idle | dockets | clusters | opinions | done
+    "phase":              "idle",   # idle|dockets|clusters|citations|prefilter|opinions|done
     "total_expected":     0,        # SC opinion clusters found in Phase 2
     "started_at":         None,     # ISO-8601 UTC timestamp when worker started
+    # Phase 3a (SQLite DB build) progress
+    "db_rows_scanned":    0,        # S3 opinion rows read so far
+    "db_rows_written":    0,        # rows written to SQLite so far
+    "db_rows_total":      0,        # known total rows in opinions CSV (0 = unknown)
+    "db_total_mb":        0.0,      # final DB size in MB (set on completion)
+    "db_courts_total":    0,        # number of courts covered in the SQLite DB
 }
 
 
